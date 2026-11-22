@@ -1,9 +1,7 @@
-#include <string.h>
-
 #include "passman/crypto.h"
 
+/* TODO(crypto): sodium_memzero(buf, len) */
 void pm_wipe(void *buf, size_t len) {
-    if (buf == NULL) return;
-    volatile unsigned char *p = buf;
-    while (len--) *p++ = 0;
+    (void)buf;
+    (void)len;
 }
