@@ -197,6 +197,27 @@ static void test_agent_full_lifecycle(void **state) {
     assert_string_equal(resp.phone, "+380991112233");
     assert_string_equal(resp.password, "s3cr3t");
 
+    /* PUT & GET record with tabs, newlines, and backslashes */
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_PUT;
+    snprintf(req.site, sizeof(req.site), "%s", "special");
+    snprintf(req.email, sizeof(req.email), "%s", "a\\b@example.com");
+    snprintf(req.username, sizeof(req.username), "%s", "user\tname");
+    snprintf(req.phone, sizeof(req.phone), "%s", "+380");
+    snprintf(req.password, sizeof(req.password), "%s", "line1\nline2\r\n\t\\end");
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_OK);
+
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_GET;
+    snprintf(req.site, sizeof(req.site), "%s", "special");
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_OK);
+    assert_string_equal(resp.email, "a\\b@example.com");
+    assert_string_equal(resp.username, "user\tname");
+    assert_string_equal(resp.phone, "+380");
+    assert_string_equal(resp.password, "line1\nline2\r\n\t\\end");
+
     /* LOCK and verify locked */
     pm_msg_wipe(&req);
     req.type = PM_MSG_LOCK;
@@ -235,10 +256,78 @@ static void test_agent_full_lifecycle(void **state) {
     assert_int_equal(access(sock_path, F_OK), -1);
 }
 
+static void test_agent_xdg_and_fallback_socket_path(void **state) {
+    (void)state;
+
+    char xdg_dir[96];
+    char sock_path[128];
+    snprintf(xdg_dir, sizeof(xdg_dir), "/tmp/passman_xdg_%ld", (long)getpid());
+    snprintf(sock_path, sizeof(sock_path), "%s/passman.sock", xdg_dir);
+    unlink(sock_path);
+    rmdir(xdg_dir);
+    assert_int_equal(mkdir(xdg_dir, 0700), 0);
+
+    assert_int_equal(unsetenv("PASSMAN_SOCKET"), 0);
+    assert_int_equal(setenv("XDG_RUNTIME_DIR", xdg_dir, 1), 0);
+
+    pid_t pid = fork();
+    assert_true(pid >= 0);
+    if (pid == 0) {
+        int rc = pm_agent_run("/tmp/mock.vault", 10);
+        _exit(rc == 0 ? 0 : 1);
+    }
+
+    assert_int_equal(wait_for_socket(sock_path), 0);
+
+    pm_msg_t req;
+    pm_msg_t resp;
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_PING;
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_OK);
+    assert_int_equal(pm_agent_stop(sock_path), 0);
+
+    int status = 0;
+    assert_int_equal(waitpid(pid, &status, 0), pid);
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    assert_int_equal(rmdir(xdg_dir), 0);
+
+    char run_dir[64];
+    snprintf(run_dir, sizeof(run_dir), "/run/user/%u", (unsigned)getuid());
+    if (access(run_dir, W_OK | X_OK) != 0) {
+        char fallback_dir[64];
+        snprintf(fallback_dir, sizeof(fallback_dir), "/tmp/passman-%u", (unsigned)getuid());
+        snprintf(sock_path, sizeof(sock_path), "%s/passman.sock", fallback_dir);
+        unlink(sock_path);
+
+        assert_int_equal(unsetenv("XDG_RUNTIME_DIR"), 0);
+        pid = fork();
+        assert_true(pid >= 0);
+        if (pid == 0) {
+            int rc = pm_agent_run("/tmp/mock.vault", 10);
+            _exit(rc == 0 ? 0 : 1);
+        }
+
+        assert_int_equal(wait_for_socket(sock_path), 0);
+        struct stat st;
+        assert_int_equal(lstat(fallback_dir, &st), 0);
+        assert_true(S_ISDIR(st.st_mode));
+        assert_int_equal(st.st_mode & 0777, 0700);
+        assert_int_equal(pm_agent_stop(sock_path), 0);
+
+        assert_int_equal(waitpid(pid, &status, 0), pid);
+        assert_true(WIFEXITED(status));
+        assert_int_equal(WEXITSTATUS(status), 0);
+        rmdir(fallback_dir);
+    }
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_agent_bad_args),
         cmocka_unit_test(test_agent_full_lifecycle),
+        cmocka_unit_test(test_agent_xdg_and_fallback_socket_path),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

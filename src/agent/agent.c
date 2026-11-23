@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
@@ -55,18 +59,60 @@ static int install_signal_handlers(void) {
     return 0;
 }
 
+static int is_owned_writable_dir(const char *dir, int use_lstat, int require_0700) {
+    struct stat st;
+    int rc = use_lstat ? lstat(dir, &st) : stat(dir, &st);
+    if (rc != 0 || !S_ISDIR(st.st_mode) || st.st_uid != getuid()) {
+        return 0;
+    }
+    if (require_0700 && (st.st_mode & 0777) != 0700) {
+        if (chmod(dir, 0700) != 0) {
+            return 0;
+        }
+    }
+    return access(dir, W_OK | X_OK) == 0;
+}
+
+static int format_socket_in_dir(const char *dir, char *out, size_t out_size) {
+    size_t len = strlen(dir);
+    while (len > 1 && dir[len - 1] == '/') {
+        len--;
+    }
+    int n = snprintf(out, out_size, "%.*s/passman.sock", (int)len, dir);
+    return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+}
+
 static int resolve_socket_path(char *out, size_t out_size) {
     const char *override = getenv("PASSMAN_SOCKET");
-    int n;
     if (override && override[0] != '\0') {
-        n = snprintf(out, out_size, "%s", override);
-    } else {
-        n = snprintf(out, out_size, PM_SOCKET_PATH, (unsigned)getuid());
+        int n = snprintf(out, out_size, "%s", override);
+        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
     }
-    if (n < 0 || (size_t)n >= out_size) {
+
+    const char *xdg_dir = getenv("XDG_RUNTIME_DIR");
+    if (xdg_dir && xdg_dir[0] != '\0' && is_owned_writable_dir(xdg_dir, 0, 0)) {
+        return format_socket_in_dir(xdg_dir, out, out_size);
+    }
+
+    char run_dir[64];
+    int rn = snprintf(run_dir, sizeof(run_dir), "/run/user/%u", (unsigned)getuid());
+    if (rn > 0 && (size_t)rn < sizeof(run_dir) && is_owned_writable_dir(run_dir, 0, 0)) {
+        int n = snprintf(out, out_size, PM_SOCKET_PATH, (unsigned)getuid());
+        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+    }
+
+    char fallback_dir[64];
+    int fn = snprintf(fallback_dir, sizeof(fallback_dir), "/tmp/passman-%u", (unsigned)getuid());
+    if (fn < 0 || (size_t)fn >= sizeof(fallback_dir)) {
         return -1;
     }
-    return 0;
+    if (mkdir(fallback_dir, 0700) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    if (!is_owned_writable_dir(fallback_dir, 1, 1)) {
+        return -1;
+    }
+    return format_socket_in_dir(fallback_dir, out, out_size);
 }
 
 static int is_socket_live(const char *sock_path) {
@@ -185,31 +231,105 @@ static void set_error(pm_msg_t *resp, const char *text) {
     snprintf(resp->error, sizeof(resp->error), "%s", text);
 }
 
-static int has_tab_or_newline(const char *s) {
-    return strchr(s, '\t') != NULL || strchr(s, '\n') != NULL || strchr(s, '\r') != NULL;
-}
-
-static int pack_secret(const pm_msg_t *req, char *out, size_t out_size) {
-    if (has_tab_or_newline(req->email) || has_tab_or_newline(req->username) ||
-        has_tab_or_newline(req->phone) || has_tab_or_newline(req->password)) {
-        return -1;
-    }
-
-    int n = snprintf(out, out_size, "%s\t%s\t%s\t%s", req->email, req->username, req->phone,
-                     req->password);
-    if (n < 0 || (size_t)n >= out_size) {
-        pm_wipe(out, out_size);
-        return -1;
+/*
+ * Record payload format stored in the vault as a NUL-terminated string:
+ *   "<email>\t<username>\t<phone>\t<password>"
+ * Backslash-escaping ("\\", "\t", "\n", "\r") preserves tabs, newlines,
+ * and backslashes in any field without colliding with the '\t' delimiter.
+ */
+static int append_escaped(char *out, size_t out_size, size_t *pos, const char *src) {
+    for (const char *p = src; *p != '\0'; p++) {
+        char esc = 0;
+        switch (*p) {
+        case '\\':
+            esc = '\\';
+            break;
+        case '\t':
+            esc = 't';
+            break;
+        case '\n':
+            esc = 'n';
+            break;
+        case '\r':
+            esc = 'r';
+            break;
+        default:
+            break;
+        }
+        size_t need = esc ? 2u : 1u;
+        if (*pos + need >= out_size) {
+            return -1;
+        }
+        if (esc) {
+            out[(*pos)++] = '\\';
+            out[(*pos)++] = esc;
+        } else {
+            out[(*pos)++] = *p;
+        }
     }
     return 0;
 }
 
-static void copy_slice(char *dst, size_t dst_size, const char *start, size_t len) {
-    size_t n = len < dst_size - 1u ? len : dst_size - 1u;
-    if (n > 0) {
-        memcpy(dst, start, n);
+static int pack_secret(const pm_msg_t *req, char *out, size_t out_size) {
+    if (!out || out_size == 0) {
+        return -1;
     }
-    dst[n] = '\0';
+
+    const char *fields[4] = {req->email, req->username, req->phone, req->password};
+    size_t pos = 0;
+
+    for (size_t i = 0; i < 4; i++) {
+        if (i > 0) {
+            if (pos + 1u >= out_size) {
+                pm_wipe(out, out_size);
+                return -1;
+            }
+            out[pos++] = '\t';
+        }
+        if (append_escaped(out, out_size, &pos, fields[i]) != 0) {
+            pm_wipe(out, out_size);
+            return -1;
+        }
+    }
+
+    out[pos] = '\0';
+    return 0;
+}
+
+static void unpack_field(char *dst, size_t dst_size, const char *start, size_t len) {
+    if (dst_size == 0) {
+        return;
+    }
+
+    size_t out_i = 0;
+    for (size_t i = 0; i < len && out_i + 1u < dst_size; i++) {
+        if (start[i] == '\\' && i + 1u < len) {
+            char decoded = 0;
+            switch (start[i + 1u]) {
+            case '\\':
+                decoded = '\\';
+                break;
+            case 't':
+                decoded = '\t';
+                break;
+            case 'n':
+                decoded = '\n';
+                break;
+            case 'r':
+                decoded = '\r';
+                break;
+            default:
+                break;
+            }
+            if (decoded != 0) {
+                dst[out_i++] = decoded;
+                i++;
+                continue;
+            }
+        }
+        dst[out_i++] = start[i];
+    }
+    dst[out_i] = '\0';
 }
 
 static void unpack_secret(const char *secret, const char *site, pm_msg_t *resp) {
@@ -223,10 +343,10 @@ static void unpack_secret(const char *secret, const char *site, pm_msg_t *resp) 
         return;
     }
 
-    copy_slice(resp->email, sizeof(resp->email), secret, (size_t)(t1 - secret));
-    copy_slice(resp->username, sizeof(resp->username), t1 + 1, (size_t)(t2 - (t1 + 1)));
-    copy_slice(resp->phone, sizeof(resp->phone), t2 + 1, (size_t)(t3 - (t2 + 1)));
-    snprintf(resp->password, sizeof(resp->password), "%s", t3 + 1);
+    unpack_field(resp->email, sizeof(resp->email), secret, (size_t)(t1 - secret));
+    unpack_field(resp->username, sizeof(resp->username), t1 + 1, (size_t)(t2 - (t1 + 1)));
+    unpack_field(resp->phone, sizeof(resp->phone), t2 + 1, (size_t)(t3 - (t2 + 1)));
+    unpack_field(resp->password, sizeof(resp->password), t3 + 1, strlen(t3 + 1));
 }
 
 static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp) {
@@ -360,6 +480,23 @@ static void handle_list(int client_fd, agent_session_t *sess) {
     pm_msg_wipe(&resp);
 }
 
+static int check_peer_credentials(int client_fd) {
+#if defined(__linux__) && defined(SO_PEERCRED)
+    struct ucred cred;
+    socklen_t len = sizeof(cred);
+    if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0 ||
+        len != sizeof(cred)) {
+        return -1;
+    }
+    if (cred.uid != getuid()) {
+        return -1;
+    }
+#else
+    (void)client_fd;
+#endif
+    return 0;
+}
+
 static void handle_client(int client_fd, agent_session_t *sess) {
     pm_msg_t req;
     pm_msg_t resp;
@@ -406,6 +543,7 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
     sess.vault_path = vault_path;
 
     if (mlock(sess.key, sizeof(sess.key)) != 0) {
+        perror("pm-agentd: mlock");
         close(listen_fd);
         unlink(sock_path);
         return -1;
@@ -445,7 +583,9 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
                 }
                 break;
             }
-            handle_client(client_fd, &sess);
+            if (check_peer_credentials(client_fd) == 0) {
+                handle_client(client_fd, &sess);
+            }
             close(client_fd);
         }
     }
