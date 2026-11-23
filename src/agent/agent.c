@@ -1,11 +1,418 @@
+#include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <time.h>
+#include <unistd.h>
+
 #include "passman/agent.h"
+#include "passman/vault.h"
+#include "ipc_internal.h"
+
+#define PM_LISTEN_BACKLOG 16
+
+static volatile sig_atomic_t g_stop_requested = 0;
+
+typedef struct {
+    uint8_t key[PM_KEY_LEN];
+    int unlocked;
+    struct timespec last_activity;
+    unsigned idle_timeout_sec;
+    const char *vault_path;
+    int stop_loop;
+} agent_session_t;
+
+static void handle_stop_signal(int sig) {
+    (void)sig;
+    g_stop_requested = 1;
+}
+
+static int install_signal_handlers(void) {
+    struct sigaction sa_stop;
+    memset(&sa_stop, 0, sizeof(sa_stop));
+    sa_stop.sa_handler = handle_stop_signal;
+    sigemptyset(&sa_stop.sa_mask);
+    if (sigaction(SIGINT, &sa_stop, NULL) != 0 || sigaction(SIGTERM, &sa_stop, NULL) != 0) {
+        return -1;
+    }
+
+    struct sigaction sa_ign;
+    memset(&sa_ign, 0, sizeof(sa_ign));
+    sa_ign.sa_handler = SIG_IGN;
+    sigemptyset(&sa_ign.sa_mask);
+    if (sigaction(SIGPIPE, &sa_ign, NULL) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int resolve_socket_path(char *out, size_t out_size) {
+    const char *override = getenv("PASSMAN_SOCKET");
+    int n;
+    if (override && override[0] != '\0') {
+        n = snprintf(out, out_size, "%s", override);
+    } else {
+        n = snprintf(out, out_size, PM_SOCKET_PATH, (unsigned)getuid());
+    }
+    if (n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
+static int is_socket_live(const char *sock_path) {
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    size_t len = strlen(sock_path);
+    if (len >= sizeof(addr.sun_path)) {
+        return -1;
+    }
+    memcpy(addr.sun_path, sock_path, len + 1u);
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    int live = 0;
+    if (connect(fd, (const struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        live = 1;
+    } else if (errno != ECONNREFUSED && errno != ENOENT) {
+        live = -1;
+    }
+    close(fd);
+    return live;
+}
+
+static int prepare_socket_path(const char *sock_path) {
+    struct stat st;
+    if (lstat(sock_path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!S_ISSOCK(st.st_mode)) {
+        return -1;
+    }
+
+    int live = is_socket_live(sock_path);
+    if (live != 0) {
+        return -1;
+    }
+    return unlink(sock_path);
+}
+
+static int create_listen_socket(const char *sock_path) {
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    size_t len = strlen(sock_path);
+    if (len == 0 || len >= sizeof(addr.sun_path)) {
+        return -1;
+    }
+    memcpy(addr.sun_path, sock_path, len + 1u);
+
+    if (prepare_socket_path(sock_path) != 0) {
+        return -1;
+    }
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    mode_t old_umask = umask(0177);
+    int bind_rc = bind(fd, (const struct sockaddr *)&addr, sizeof(addr));
+    umask(old_umask);
+
+    if (bind_rc != 0) {
+        close(fd);
+        return -1;
+    }
+    if (chmod(sock_path, S_IRUSR | S_IWUSR) != 0 || listen(fd, PM_LISTEN_BACKLOG) != 0) {
+        close(fd);
+        unlink(sock_path);
+        return -1;
+    }
+
+    return fd;
+}
+
+static void lock_session(agent_session_t *sess) {
+    memset(sess->key, 0, sizeof(sess->key));
+    pm_wipe(sess->key, sizeof(sess->key));
+    sess->unlocked = 0;
+}
+
+static int update_activity(agent_session_t *sess) {
+    return clock_gettime(CLOCK_MONOTONIC, &sess->last_activity);
+}
+
+static int compute_poll_timeout_ms(const agent_session_t *sess) {
+    if (!sess->unlocked || sess->idle_timeout_sec == 0) {
+        return -1;
+    }
+
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return 0;
+    }
+
+    int64_t elapsed_ms = (int64_t)(now.tv_sec - sess->last_activity.tv_sec) * 1000 +
+                         (int64_t)(now.tv_nsec - sess->last_activity.tv_nsec) / 1000000;
+    if (elapsed_ms < 0) {
+        elapsed_ms = 0;
+    }
+
+    int64_t limit_ms = (int64_t)sess->idle_timeout_sec * 1000;
+    if (elapsed_ms >= limit_ms) {
+        return 0;
+    }
+
+    int64_t remaining = limit_ms - elapsed_ms;
+    return remaining > INT_MAX ? INT_MAX : (int)remaining;
+}
+
+static void set_error(pm_msg_t *resp, const char *text) {
+    resp->type = PM_MSG_ERR;
+    snprintf(resp->error, sizeof(resp->error), "%s", text);
+}
+
+static int has_tab_or_newline(const char *s) {
+    return strchr(s, '\t') != NULL || strchr(s, '\n') != NULL || strchr(s, '\r') != NULL;
+}
+
+static int pack_secret(const pm_msg_t *req, char *out, size_t out_size) {
+    if (has_tab_or_newline(req->email) || has_tab_or_newline(req->username) ||
+        has_tab_or_newline(req->phone) || has_tab_or_newline(req->password)) {
+        return -1;
+    }
+
+    int n = snprintf(out, out_size, "%s\t%s\t%s\t%s", req->email, req->username, req->phone,
+                     req->password);
+    if (n < 0 || (size_t)n >= out_size) {
+        pm_wipe(out, out_size);
+        return -1;
+    }
+    return 0;
+}
+
+static void copy_slice(char *dst, size_t dst_size, const char *start, size_t len) {
+    size_t n = len < dst_size - 1u ? len : dst_size - 1u;
+    if (n > 0) {
+        memcpy(dst, start, n);
+    }
+    dst[n] = '\0';
+}
+
+static void unpack_secret(const char *secret, const char *site, pm_msg_t *resp) {
+    snprintf(resp->site, sizeof(resp->site), "%s", site);
+
+    const char *t1 = strchr(secret, '\t');
+    const char *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+    const char *t3 = t2 ? strchr(t2 + 1, '\t') : NULL;
+    if (!t1 || !t2 || !t3) {
+        snprintf(resp->password, sizeof(resp->password), "%s", secret);
+        return;
+    }
+
+    copy_slice(resp->email, sizeof(resp->email), secret, (size_t)(t1 - secret));
+    copy_slice(resp->username, sizeof(resp->username), t1 + 1, (size_t)(t2 - (t1 + 1)));
+    copy_slice(resp->phone, sizeof(resp->phone), t2 + 1, (size_t)(t3 - (t2 + 1)));
+    snprintf(resp->password, sizeof(resp->password), "%s", t3 + 1);
+}
+
+static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp) {
+    pm_msg_wipe(resp);
+
+    switch (req->type) {
+    case PM_MSG_PING:
+        resp->type = PM_MSG_OK;
+        break;
+
+    case PM_MSG_UNLOCK:
+        if (pm_vault_open(sess->vault_path, req->password, sess->key) == 0) {
+            sess->unlocked = 1;
+            update_activity(sess);
+            resp->type = PM_MSG_OK;
+        } else {
+            lock_session(sess);
+            set_error(resp, "unlock failed");
+        }
+        pm_msg_wipe(req);
+        break;
+
+    case PM_MSG_LOCK:
+        lock_session(sess);
+        resp->type = PM_MSG_OK;
+        break;
+
+    case PM_MSG_STOP:
+        lock_session(sess);
+        sess->stop_loop = 1;
+        resp->type = PM_MSG_OK;
+        break;
+
+    case PM_MSG_GET: {
+        if (!sess->unlocked) {
+            set_error(resp, "vault is locked");
+            break;
+        }
+        update_activity(sess);
+        char secret[PM_MAX_SECRET_LEN];
+        if (pm_vault_get(sess->vault_path, sess->key, req->site, secret, sizeof(secret)) == 0) {
+            resp->type = PM_MSG_OK;
+            unpack_secret(secret, req->site, resp);
+        } else {
+            set_error(resp, "record not found");
+        }
+        pm_wipe(secret, sizeof(secret));
+        break;
+    }
+
+    case PM_MSG_PUT: {
+        if (!sess->unlocked) {
+            set_error(resp, "vault is locked");
+            break;
+        }
+        update_activity(sess);
+        char secret[PM_MAX_SECRET_LEN];
+        if (pack_secret(req, secret, sizeof(secret)) != 0) {
+            set_error(resp, "invalid record fields");
+        } else if (pm_vault_put(sess->vault_path, sess->key, req->site, secret) == 0) {
+            resp->type = PM_MSG_OK;
+        } else {
+            set_error(resp, "vault write failed");
+        }
+        pm_wipe(secret, sizeof(secret));
+        pm_msg_wipe(req);
+        break;
+    }
+
+    default:
+        set_error(resp, "unknown request");
+        break;
+    }
+}
+
+static void handle_client(int client_fd, agent_session_t *sess) {
+    pm_msg_t req;
+    pm_msg_t resp;
+    pm_msg_wipe(&req);
+    pm_msg_wipe(&resp);
+
+    if (pm_ipc_recv_msg(client_fd, &req) == 0) {
+        handle_request(sess, &req, &resp);
+        pm_ipc_send_msg(client_fd, &resp);
+    }
+
+    pm_msg_wipe(&req);
+    pm_msg_wipe(&resp);
+}
 
 int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
-    (void)vault_path; (void)idle_timeout_sec;
-    return -1;
+    if (!vault_path || vault_path[0] == '\0') {
+        return -1;
+    }
+
+    g_stop_requested = 0;
+    if (install_signal_handlers() != 0) {
+        return -1;
+    }
+
+    struct sockaddr_un dummy;
+    char sock_path[sizeof(dummy.sun_path)];
+    if (resolve_socket_path(sock_path, sizeof(sock_path)) != 0) {
+        return -1;
+    }
+
+    int listen_fd = create_listen_socket(sock_path);
+    if (listen_fd < 0) {
+        return -1;
+    }
+
+    agent_session_t sess;
+    memset(&sess, 0, sizeof(sess));
+    sess.idle_timeout_sec = idle_timeout_sec;
+    sess.vault_path = vault_path;
+
+    if (mlock(sess.key, sizeof(sess.key)) != 0) {
+        close(listen_fd);
+        unlink(sock_path);
+        return -1;
+    }
+
+    while (!g_stop_requested && !sess.stop_loop) {
+        int timeout_ms = compute_poll_timeout_ms(&sess);
+        if (timeout_ms == 0) {
+            lock_session(&sess);
+            timeout_ms = -1;
+        }
+
+        struct pollfd pfd;
+        pfd.fd = listen_fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+
+        int rc = poll(&pfd, 1, timeout_ms);
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (rc == 0) {
+            lock_session(&sess);
+            continue;
+        }
+        if (pfd.revents & (POLLERR | POLLNVAL)) {
+            break;
+        }
+        if (pfd.revents & POLLIN) {
+            int client_fd = accept(listen_fd, NULL, NULL);
+            if (client_fd < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                break;
+            }
+            handle_client(client_fd, &sess);
+            close(client_fd);
+        }
+    }
+
+    lock_session(&sess);
+    munlock(sess.key, sizeof(sess.key));
+    close(listen_fd);
+    unlink(sock_path);
+    return 0;
 }
 
 int pm_agent_stop(const char *socket_path) {
-    (void)socket_path;
-    return -1;
+    if (!socket_path || socket_path[0] == '\0') {
+        return -1;
+    }
+
+    pm_msg_t req;
+    pm_msg_t resp;
+    pm_msg_wipe(&req);
+    pm_msg_wipe(&resp);
+    req.type = PM_MSG_STOP;
+
+    int rc = -1;
+    if (pm_agent_request(socket_path, &req, &resp) == 0 && resp.type == PM_MSG_OK) {
+        rc = 0;
+    }
+
+    pm_msg_wipe(&req);
+    pm_msg_wipe(&resp);
+    return rc;
 }
