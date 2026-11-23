@@ -147,7 +147,6 @@ static int create_listen_socket(const char *sock_path) {
 }
 
 static void lock_session(agent_session_t *sess) {
-    memset(sess->key, 0, sizeof(sess->key));
     pm_wipe(sess->key, sizeof(sess->key));
     sess->unlocked = 0;
 }
@@ -303,6 +302,64 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
     }
 }
 
+typedef struct {
+    int client_fd;
+    int sent_any;
+    int send_err;
+} list_send_ctx_t;list_se
+
+static int list_send_cb(const char *name, void *user_data) {
+    list_send_ctx_t *ctx = (list_send_ctx_t *)user_data;
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+
+    pm_msg_t item;
+    pm_msg_wipe(&item);
+    item.type = PM_MSG_OK;
+    snprintf(item.site, sizeof(item.site), "%s", name);
+
+    int rc = pm_ipc_send_msg(ctx->client_fd, &item);
+    pm_msg_wipe(&item);
+    if (rc != 0) {
+        ctx->send_err = 1;
+        return -1;
+    }
+    ctx->sent_any = 1;
+    return 0;
+}
+
+static void handle_list(int client_fd, agent_session_t *sess) {
+    pm_msg_t resp;
+    pm_msg_wipe(&resp);
+
+    if (!sess->unlocked) {
+        set_error(&resp, "vault is locked");
+        pm_ipc_send_msg(client_fd, &resp);
+        pm_msg_wipe(&resp);
+        return;
+    }
+
+    update_activity(sess);
+    list_send_ctx_t ctx = {.client_fd = client_fd, .sent_any = 0, .send_err = 0};
+    int vault_rc = pm_vault_list(sess->vault_path, sess->key, list_send_cb, &ctx);
+    if (ctx.send_err) {
+        return;
+    }
+    if (vault_rc != 0) {
+        if (!ctx.sent_any) {
+            set_error(&resp, "vault list failed");
+            pm_ipc_send_msg(client_fd, &resp);
+            pm_msg_wipe(&resp);
+        }
+        return;
+    }
+
+    resp.type = PM_MSG_LIST_END;
+    pm_ipc_send_msg(client_fd, &resp);
+    pm_msg_wipe(&resp);
+}
+
 static void handle_client(int client_fd, agent_session_t *sess) {
     pm_msg_t req;
     pm_msg_t resp;
@@ -310,8 +367,12 @@ static void handle_client(int client_fd, agent_session_t *sess) {
     pm_msg_wipe(&resp);
 
     if (pm_ipc_recv_msg(client_fd, &req) == 0) {
-        handle_request(sess, &req, &resp);
-        pm_ipc_send_msg(client_fd, &resp);
+        if (req.type == PM_MSG_LIST) {
+            handle_list(client_fd, sess);
+        } else {
+            handle_request(sess, &req, &resp);
+            pm_ipc_send_msg(client_fd, &resp);
+        }
     }
 
     pm_msg_wipe(&req);

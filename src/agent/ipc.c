@@ -16,7 +16,6 @@ void pm_msg_wipe(pm_msg_t *msg) {
     if (!msg) {
         return;
     }
-    memset(msg, 0, sizeof(*msg));
     pm_wipe(msg, sizeof(*msg));
 }
 
@@ -133,6 +132,8 @@ static int validate_msg_fields(const pm_msg_t *msg) {
     case PM_MSG_PING:
     case PM_MSG_LOCK:
     case PM_MSG_STOP:
+    case PM_MSG_LIST:
+    case PM_MSG_LIST_END:
         return 0;
     case PM_MSG_UNLOCK:
         return msg->password[0] != '\0' ? 0 : -1;
@@ -171,6 +172,8 @@ int pm_msg_encode(const pm_msg_t *msg, char *buf, size_t buf_size) {
     case PM_MSG_PING:
     case PM_MSG_LOCK:
     case PM_MSG_STOP:
+    case PM_MSG_LIST:
+    case PM_MSG_LIST_END:
         break;
     case PM_MSG_UNLOCK:
         rc = write_field(payload, payload_cap, &offset, msg->password, sizeof(msg->password));
@@ -235,6 +238,8 @@ int pm_msg_decode(const char *buf, size_t buf_len, pm_msg_t *msg) {
     case PM_MSG_PING:
     case PM_MSG_LOCK:
     case PM_MSG_STOP:
+    case PM_MSG_LIST:
+    case PM_MSG_LIST_END:
         break;
     case PM_MSG_UNLOCK:
         rc = read_field(payload, payload_size, &offset, msg->password, sizeof(msg->password));
@@ -343,12 +348,10 @@ int pm_ipc_recv_msg(int fd, pm_msg_t *msg) {
     return rc;
 }
 
-int pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg_t *resp) {
-    if (!socket_path || socket_path[0] == '\0' || !req || !resp) {
+static int connect_unix_socket(const char *socket_path) {
+    if (!socket_path || socket_path[0] == '\0') {
         return -1;
     }
-
-    pm_msg_wipe(resp);
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -363,13 +366,68 @@ int pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg_t *res
     if (fd < 0) {
         return -1;
     }
+    if (connect(fd, (const struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+int pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg_t *resp) {
+    if (!req || !resp) {
+        return -1;
+    }
+
+    pm_msg_wipe(resp);
+
+    int fd = connect_unix_socket(socket_path);
+    if (fd < 0) {
+        return -1;
+    }
 
     int rc = -1;
-    if (connect(fd, (const struct sockaddr *)&addr, sizeof(addr)) == 0 &&
-        pm_ipc_send_msg(fd, req) == 0 && pm_ipc_recv_msg(fd, resp) == 0) {
+    if (pm_ipc_send_msg(fd, req) == 0 && pm_ipc_recv_msg(fd, resp) == 0) {
         rc = 0;
     }
 
+    close(fd);
+    return rc;
+}
+
+int pm_agent_list(const char *socket_path, pm_agent_list_cb cb, void *user_data) {
+    if (!cb) {
+        return -1;
+    }
+
+    int fd = connect_unix_socket(socket_path);
+    if (fd < 0) {
+        return -1;
+    }
+
+    int rc = -1;
+    pm_msg_t req;
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_LIST;
+
+    if (pm_ipc_send_msg(fd, &req) == 0) {
+        pm_msg_t resp;
+        pm_msg_wipe(&resp);
+        for (;;) {
+            if (pm_ipc_recv_msg(fd, &resp) != 0) {
+                break;
+            }
+            if (resp.type == PM_MSG_LIST_END) {
+                rc = 0;
+                break;
+            }
+            if (resp.type != PM_MSG_OK || cb(resp.site, user_data) != 0) {
+                break;
+            }
+        }
+        pm_msg_wipe(&resp);
+    }
+
+    pm_msg_wipe(&req);
     close(fd);
     return rc;
 }

@@ -26,7 +26,9 @@ typedef enum {
     PM_MSG_GET = 5,
     PM_MSG_PUT = 6,
     PM_MSG_OK = 7,
-    PM_MSG_ERR = 8
+    PM_MSG_ERR = 8,
+    PM_MSG_LIST = 9,
+    PM_MSG_LIST_END = 10
 } pm_msg_type;
 
 typedef struct {
@@ -47,6 +49,12 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec);
 
 /* Send one structured request to a running agent and receive its reply. */
 int pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg_t *resp);
+
+/* Callback invoked for each site name returned by pm_agent_list. */
+typedef int (*pm_agent_list_cb)(const char *site, void *user_data);
+
+/* Request the list of site names from an unlocked agent (no secrets sent). */
+int pm_agent_list(const char *socket_path, pm_agent_list_cb cb, void *user_data);
 
 /* Ask the agent to forget the key and stop. */
 int pm_agent_stop(const char *socket_path);
