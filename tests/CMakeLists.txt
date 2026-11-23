@@ -8,3 +8,7 @@ add_test(NAME crypto COMMAND test_crypto)
 add_executable(test_vault test_vault.c)
 target_link_libraries(test_vault PRIVATE pm_vault PkgConfig::CMOCKA)
 add_test(NAME vault COMMAND test_vault)
+
+add_executable(test_cli test_cli.c)
+target_link_libraries(test_cli PRIVATE pm_cli PkgConfig::CMOCKA)
+add_test(NAME cli COMMAND test_cli)

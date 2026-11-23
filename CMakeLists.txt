@@ -37,9 +37,17 @@ add_library(pm_agent STATIC
 )
 target_link_libraries(pm_agent PUBLIC pm_vault)
 
+# ---- cli library: argument parsing, terminal I/O ----
+add_library(pm_cli STATIC
+    src/cli/cli.c
+    src/cli/term.c
+)
+target_include_directories(pm_cli PUBLIC include)
+target_link_libraries(pm_cli PUBLIC pm_agent)
+
 # ---- executables ----
-add_executable(passman src/main.c src/cli/cli.c src/cli/term.c)
-target_link_libraries(passman PRIVATE pm_agent)
+add_executable(passman src/main.c)
+target_link_libraries(passman PRIVATE pm_cli)
 
 add_executable(pm-agentd src/agent/main.c)
 target_link_libraries(pm-agentd PRIVATE pm_agent)
