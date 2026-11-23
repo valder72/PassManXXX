@@ -306,7 +306,7 @@ typedef struct {
     int client_fd;
     int sent_any;
     int send_err;
-} list_send_ctx_t;list_se
+} list_send_ctx_t;
 
 static int list_send_cb(const char *name, void *user_data) {
     list_send_ctx_t *ctx = (list_send_ctx_t *)user_data;
