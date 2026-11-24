@@ -241,6 +241,34 @@ static void test_slow_client_hits_overall_deadline(void **state) {
     assert_int_equal(waitpid(pid, &status, 0), pid);
 }
 
+static void test_slow_reader_send_hits_deadline(void **state) {
+    (void)state;
+
+    int sv[2];
+    assert_int_equal(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    int sndbuf = 1024;
+    setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+    char payload[PM_IPC_MAX_PAYLOAD];
+    memset(payload, 'A', sizeof(payload));
+
+    int timed_out = 0;
+    for (int i = 0; i < 64; i++) {
+        errno = 0;
+        if (pm_ipc_send_frame_timeout(sv[0], payload, (uint16_t)sizeof(payload), 100) != 0) {
+            if (errno == ETIMEDOUT) {
+                timed_out = 1;
+            }
+            break;
+        }
+    }
+    assert_int_equal(timed_out, 1);
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_msg_wipe),
@@ -251,6 +279,7 @@ int main(void) {
         cmocka_unit_test(test_decode_rejects_corrupted),
         cmocka_unit_test(test_socketpair_send_recv_msg),
         cmocka_unit_test(test_slow_client_hits_overall_deadline),
+        cmocka_unit_test(test_slow_reader_send_hits_deadline),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

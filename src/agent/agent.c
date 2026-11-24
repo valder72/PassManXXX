@@ -59,7 +59,11 @@ static int install_signal_handlers(void) {
     return 0;
 }
 
-static int resolve_socket_path(char *out, size_t out_size) {
+int pm_socket_path(char *out, size_t out_size) {
+    if (!out || out_size == 0) {
+        return -1;
+    }
+
     const char *override = getenv("PASSMAN_SOCKET");
     if (override && override[0] != '\0') {
         int n = snprintf(out, out_size, "%s", override);
@@ -394,7 +398,8 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
         }
         update_activity(sess);
         char secret[PM_MAX_SECRET_LEN];
-        if (pm_vault_get(sess->vault_path, sess->key, req->site, secret, sizeof(secret)) == 0) {
+        int st = pm_vault_get(sess->vault_path, sess->key, req->site, secret, sizeof(secret));
+        if (st == PM_OK) {
             if (unpack_secret(secret, req->site, resp) == 0) {
                 resp->type = PM_MSG_OK;
             } else {
@@ -402,7 +407,7 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
                 set_error(resp, "record too large");
             }
         } else {
-            set_error(resp, "record not found");
+            set_error(resp, pm_strerror((pm_status)st));
         }
         pm_wipe(secret, sizeof(secret));
         break;
@@ -539,7 +544,7 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
 
     struct sockaddr_un dummy;
     char sock_path[sizeof(dummy.sun_path)];
-    if (resolve_socket_path(sock_path, sizeof(sock_path)) != 0) {
+    if (pm_socket_path(sock_path, sizeof(sock_path)) != 0) {
         return -1;
     }
 
@@ -589,10 +594,16 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
         if (pfd.revents & POLLIN) {
             int client_fd = accept(listen_fd, NULL, NULL);
             if (client_fd < 0) {
-                if (errno != EINTR && errno != ECONNABORTED) {
-                    perror("pm-agentd: accept");
+                if (errno == EINTR || errno == ECONNABORTED) {
+                    continue;
                 }
-                continue;
+                if (errno == EMFILE || errno == ENFILE) {
+                    perror("pm-agentd: accept");
+                    poll(NULL, 0, 100);
+                    continue;
+                }
+                perror("pm-agentd: accept");
+                break;
             }
             if (check_peer_credentials(client_fd) == 0) {
                 handle_client(client_fd, &sess);

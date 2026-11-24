@@ -51,7 +51,7 @@ int __wrap_pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES], const
     (void)path;
     (void)key;
     if (!g_mock_has_record || !name || strcmp(name, g_mock_name) != 0) {
-        return -1;
+        return PM_ERR_NOT_FOUND;
     }
     int n = snprintf(out, out_size, "%s", g_mock_secret);
     return (n >= 0 && (size_t)n < out_size) ? 0 : -1;
@@ -100,6 +100,9 @@ static int wait_for_socket(const char *sock_path) {
 static void test_agent_bad_args(void **state) {
     (void)state;
 
+    char buf[16];
+    assert_int_equal(pm_socket_path(NULL, sizeof(buf)), -1);
+    assert_int_equal(pm_socket_path(buf, 0), -1);
     assert_int_equal(pm_agent_run(NULL, 10), -1);
     assert_int_equal(pm_agent_run("", 10), -1);
     assert_int_equal(pm_agent_stop(NULL), -1);
@@ -210,6 +213,13 @@ static void test_agent_full_lifecycle(void **state) {
     assert_string_equal(resp.password, "line1\nline2\r\n\t\\end");
 
     pm_msg_wipe(&req);
+    req.type = PM_MSG_GET;
+    snprintf(req.site, sizeof(req.site), "%s", "missing");
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_string_equal(resp.error, pm_strerror(PM_ERR_NOT_FOUND));
+
+    pm_msg_wipe(&req);
     req.type = PM_MSG_LOCK;
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_OK);
@@ -257,6 +267,10 @@ static void test_agent_xdg_and_fallback_socket_path(void **state) {
 
     assert_int_equal(unsetenv("PASSMAN_SOCKET"), 0);
     assert_int_equal(setenv("XDG_RUNTIME_DIR", xdg_dir, 1), 0);
+
+    char resolved[128];
+    assert_int_equal(pm_socket_path(resolved, sizeof(resolved)), 0);
+    assert_string_equal(resolved, sock_path);
 
     pid_t pid = fork();
     assert_true(pid >= 0);

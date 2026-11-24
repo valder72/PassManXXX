@@ -11,33 +11,13 @@
 #include "passman/agent.h"
 #include "ipc_internal.h"
 
-#define PM_IPC_RECV_TIMEOUT_MS 10000
+#define PM_IPC_IO_TIMEOUT_MS 10000
 
 void pm_msg_wipe(pm_msg_t *msg) {
     if (!msg) {
         return;
     }
     pm_wipe(msg, sizeof(*msg));
-}
-
-static int send_all(int fd, const void *buf, size_t len) {
-    const uint8_t *p = (const uint8_t *)buf;
-    size_t sent = 0;
-
-    while (sent < len) {
-        ssize_t n = send(fd, p + sent, len - sent, MSG_NOSIGNAL);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (n == 0) {
-            return -1;
-        }
-        sent += (size_t)n;
-    }
-    return 0;
 }
 
 static int calc_remaining_ms(const struct timespec *start, int total_timeout_ms) {
@@ -56,10 +36,11 @@ static int calc_remaining_ms(const struct timespec *start, int total_timeout_ms)
     return (int)(total_timeout_ms - elapsed_ms);
 }
 
-static int wait_readable(int fd, const struct timespec *start, int total_timeout_ms) {
+static int wait_socket_ready(int fd, short events, const struct timespec *start,
+                             int total_timeout_ms) {
     struct pollfd pfd;
     pfd.fd = fd;
-    pfd.events = POLLIN;
+    pfd.events = events;
     pfd.revents = 0;
 
     for (;;) {
@@ -87,18 +68,42 @@ static int wait_readable(int fd, const struct timespec *start, int total_timeout
     }
 }
 
+static int send_all(int fd, const void *buf, size_t len, const struct timespec *start,
+                    int total_timeout_ms) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+
+    while (sent < len) {
+        if (wait_socket_ready(fd, POLLOUT, start, total_timeout_ms) != 0) {
+            return -1;
+        }
+        ssize_t n = send(fd, p + sent, len - sent, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            return -1;
+        }
+        if (n == 0) {
+            return -1;
+        }
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
 static int recv_all(int fd, void *buf, size_t len, const struct timespec *start,
                     int total_timeout_ms) {
     uint8_t *p = (uint8_t *)buf;
     size_t recvd = 0;
 
     while (recvd < len) {
-        if (wait_readable(fd, start, total_timeout_ms) != 0) {
+        if (wait_socket_ready(fd, POLLIN, start, total_timeout_ms) != 0) {
             return -1;
         }
-        ssize_t n = recv(fd, p + recvd, len - recvd, 0);
+        ssize_t n = recv(fd, p + recvd, len - recvd, MSG_DONTWAIT);
         if (n < 0) {
-            if (errno == EINTR) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;
             }
             return -1;
@@ -302,17 +307,27 @@ int pm_msg_decode(const char *buf, size_t buf_len, pm_msg_t *msg) {
     return 0;
 }
 
-int pm_ipc_send_frame(int fd, const void *data, uint16_t size) {
-    if (fd < 0 || !data || size == 0 || size > PM_IPC_MAX_PAYLOAD) {
+int pm_ipc_send_frame_timeout(int fd, const void *data, uint16_t size, int timeout_ms) {
+    if (fd < 0 || !data || size == 0 || size > PM_IPC_MAX_PAYLOAD || timeout_ms <= 0) {
         return -1;
     }
-    if (send_all(fd, &size, sizeof(size)) != 0) {
+
+    struct timespec start;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
         return -1;
     }
-    if (send_all(fd, data, size) != 0) {
+
+    if (send_all(fd, &size, sizeof(size), &start, timeout_ms) != 0) {
+        return -1;
+    }
+    if (send_all(fd, data, size, &start, timeout_ms) != 0) {
         return -1;
     }
     return 0;
+}
+
+int pm_ipc_send_frame(int fd, const void *data, uint16_t size) {
+    return pm_ipc_send_frame_timeout(fd, data, size, PM_IPC_IO_TIMEOUT_MS);
 }
 
 int pm_ipc_recv_frame_timeout(int fd, void *buf, size_t buf_size, uint16_t *out_size,
@@ -343,11 +358,16 @@ int pm_ipc_recv_frame_timeout(int fd, void *buf, size_t buf_size, uint16_t *out_
 }
 
 int pm_ipc_recv_frame(int fd, void *buf, size_t buf_size, uint16_t *out_size) {
-    return pm_ipc_recv_frame_timeout(fd, buf, buf_size, out_size, PM_IPC_RECV_TIMEOUT_MS);
+    return pm_ipc_recv_frame_timeout(fd, buf, buf_size, out_size, PM_IPC_IO_TIMEOUT_MS);
 }
 
 int pm_ipc_send_msg(int fd, const pm_msg_t *msg) {
     if (fd < 0 || !msg) {
+        return -1;
+    }
+
+    struct timespec start;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
         return -1;
     }
 
@@ -358,7 +378,7 @@ int pm_ipc_send_msg(int fd, const pm_msg_t *msg) {
         return -1;
     }
 
-    int rc = send_all(fd, frame, (size_t)total_len);
+    int rc = send_all(fd, frame, (size_t)total_len, &start, PM_IPC_IO_TIMEOUT_MS);
     pm_wipe(frame, sizeof(frame));
     return rc;
 }

@@ -18,6 +18,7 @@ int pm_msg_encode(const pm_msg_t *msg, char *buf, size_t buf_size);
 int pm_msg_decode(const char *buf, size_t buf_len, pm_msg_t *msg);
 
 int pm_ipc_send_frame(int fd, const void *data, uint16_t size);
+int pm_ipc_send_frame_timeout(int fd, const void *data, uint16_t size, int timeout_ms);
 int pm_ipc_recv_frame(int fd, void *buf, size_t buf_size, uint16_t *out_size);
 int pm_ipc_recv_frame_timeout(int fd, void *buf, size_t buf_size, uint16_t *out_size,
                               int timeout_ms);
