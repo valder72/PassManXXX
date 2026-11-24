@@ -35,6 +35,30 @@ ctest --test-dir build --output-on-failure
 
 Dependencies: `libsodium-dev`, `libcmocka-dev`, `cmake`, `pkg-config`.
 
+## Usage
+
+```bash
+passman init                    # create the vault (asks for a master password twice)
+passman unlock -t 600           # start pm-agentd if needed, unlock, auto-lock after 10 min idle
+passman add github              # e-mail / username / phone (optional) + password
+passman add wifi -g -l 32       # same, but generate a 32-character password
+passman get github              # show the record
+passman get github -p | wl-copy # only the password, for scripts
+passman list
+passman gen --no-symbols        # random password, no vault needed
+
+passman totp add github         # paste the base32 secret or otpauth:// URI from the site
+passman totp github             # current 6-digit code
+passman totp list
+
+passman lock                    # agent forgets the key
+passman stop                    # agent forgets the key and exits
+```
+
+Exit codes: `0` ok, `1` error, `2` bad command line. The vault lives at
+`$PASSMAN_VAULT`, else `$XDG_DATA_HOME/passman/vault.pmx`, else
+`~/.local/share/passman/vault.pmx`; `-v PATH` overrides it.
+
 ## Status
 
 Skeleton: headers and build are in place, implementations are stubs marked

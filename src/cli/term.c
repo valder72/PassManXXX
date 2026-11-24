@@ -195,3 +195,58 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
     buf[pos] = '\0';
     return PM_OK;
 }
+
+pm_status pm_read_line(const char *prompt, char *buf, size_t buf_size) {
+    if (buf == NULL || buf_size == 0) {
+        return PM_ERR_ARG;
+    }
+    buf[0] = '\0';
+
+    if (prompt != NULL && prompt[0] != '\0') {
+        if (write(STDERR_FILENO, prompt, strlen(prompt)) < 0) {
+            /* Non-fatal: prompt write error */
+        }
+    }
+
+    size_t pos = 0;
+    int got_any = 0;
+    int truncated = 0;
+
+    for (;;) {
+        char ch;
+        ssize_t n = read(STDIN_FILENO, &ch, 1);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            pm_wipe(buf, buf_size);
+            return PM_ERR_IO;
+        }
+        if (n == 0) {
+            break; /* EOF */
+        }
+        got_any = 1;
+        if (ch == '\n') {
+            break;
+        }
+        if (ch == '\r') {
+            continue;
+        }
+        if (pos + 1 < buf_size) {
+            buf[pos++] = ch;
+        } else {
+            truncated = 1; /* keep reading so the rest of the line is not left in stdin */
+        }
+    }
+
+    if (truncated) {
+        pm_wipe(buf, buf_size);
+        return PM_ERR_TOO_BIG;
+    }
+    if (!got_any) {
+        pm_wipe(buf, buf_size);
+        return PM_ERR_EOF;
+    }
+    buf[pos] = '\0';
+    return PM_OK;
+}

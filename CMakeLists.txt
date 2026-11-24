@@ -49,6 +49,7 @@ add_library(pm_cli STATIC
     src/cli/args.c
     src/cli/term.c
     src/cli/totp.c
+    src/cli/spawn.c
 )
 target_include_directories(pm_cli PUBLIC include)
 target_link_libraries(pm_cli PUBLIC pm_agent)
