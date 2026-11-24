@@ -296,14 +296,15 @@ static int pack_secret(const pm_msg_t *req, char *out, size_t out_size) {
     return 0;
 }
 
-static void unpack_field(char *dst, size_t dst_size, const char *start, size_t len) {
+static int unpack_field(char *dst, size_t dst_size, const char *start, size_t len) {
     if (dst_size == 0) {
-        return;
+        return -1;
     }
 
     size_t out_i = 0;
-    for (size_t i = 0; i < len && out_i + 1u < dst_size; i++) {
-        if (start[i] == '\\' && i + 1u < len) {
+    for (size_t i = 0; i < len; i++) {
+        char ch = start[i];
+        if (ch == '\\' && i + 1u < len) {
             char decoded = 0;
             switch (start[i + 1u]) {
             case '\\':
@@ -322,31 +323,44 @@ static void unpack_field(char *dst, size_t dst_size, const char *start, size_t l
                 break;
             }
             if (decoded != 0) {
-                dst[out_i++] = decoded;
+                ch = decoded;
                 i++;
-                continue;
             }
         }
-        dst[out_i++] = start[i];
+        if (out_i + 1u >= dst_size) {
+            pm_wipe(dst, dst_size);
+            return -1;
+        }
+        dst[out_i++] = ch;
     }
     dst[out_i] = '\0';
+    return 0;
 }
 
-static void unpack_secret(const char *secret, const char *site, pm_msg_t *resp) {
+static int unpack_secret(const char *secret, const char *site, pm_msg_t *resp) {
     snprintf(resp->site, sizeof(resp->site), "%s", site);
 
     const char *t1 = strchr(secret, '\t');
     const char *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
     const char *t3 = t2 ? strchr(t2 + 1, '\t') : NULL;
     if (!t1 || !t2 || !t3) {
-        snprintf(resp->password, sizeof(resp->password), "%s", secret);
-        return;
+        size_t len = strlen(secret);
+        if (len >= sizeof(resp->password)) {
+            pm_wipe(resp->password, sizeof(resp->password));
+            return -1;
+        }
+        memcpy(resp->password, secret, len + 1u);
+        return 0;
     }
 
-    unpack_field(resp->email, sizeof(resp->email), secret, (size_t)(t1 - secret));
-    unpack_field(resp->username, sizeof(resp->username), t1 + 1, (size_t)(t2 - (t1 + 1)));
-    unpack_field(resp->phone, sizeof(resp->phone), t2 + 1, (size_t)(t3 - (t2 + 1)));
-    unpack_field(resp->password, sizeof(resp->password), t3 + 1, strlen(t3 + 1));
+    if (unpack_field(resp->email, sizeof(resp->email), secret, (size_t)(t1 - secret)) != 0 ||
+        unpack_field(resp->username, sizeof(resp->username), t1 + 1, (size_t)(t2 - (t1 + 1))) !=
+            0 ||
+        unpack_field(resp->phone, sizeof(resp->phone), t2 + 1, (size_t)(t3 - (t2 + 1))) != 0 ||
+        unpack_field(resp->password, sizeof(resp->password), t3 + 1, strlen(t3 + 1)) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp) {
@@ -388,8 +402,12 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
         update_activity(sess);
         char secret[PM_MAX_SECRET_LEN];
         if (pm_vault_get(sess->vault_path, sess->key, req->site, secret, sizeof(secret)) == 0) {
-            resp->type = PM_MSG_OK;
-            unpack_secret(secret, req->site, resp);
+            if (unpack_secret(secret, req->site, resp) == 0) {
+                resp->type = PM_MSG_OK;
+            } else {
+                pm_msg_wipe(resp);
+                set_error(resp, "record too large");
+            }
         } else {
             set_error(resp, "record not found");
         }

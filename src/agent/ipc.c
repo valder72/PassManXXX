@@ -1,10 +1,12 @@
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "passman/agent.h"
@@ -39,13 +41,50 @@ static int send_all(int fd, const void *buf, size_t len) {
     return 0;
 }
 
-static int wait_readable(int fd, int timeout_ms) {
+static int set_deadline_ms(struct timespec *deadline, int timeout_ms) {
+    if (clock_gettime(CLOCK_MONOTONIC, deadline) != 0) {
+        return -1;
+    }
+    deadline->tv_sec += timeout_ms / 1000;
+    deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (deadline->tv_nsec >= 1000000000L) {
+        deadline->tv_sec += 1;
+        deadline->tv_nsec -= 1000000000L;
+    }
+    return 0;
+}
+
+static int remaining_timeout_ms(const struct timespec *deadline) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return 0;
+    }
+    int64_t sec = (int64_t)(deadline->tv_sec - now.tv_sec);
+    int64_t nsec = (int64_t)(deadline->tv_nsec - now.tv_nsec);
+    if (nsec < 0) {
+        sec -= 1;
+        nsec += 1000000000LL;
+    }
+    if (sec < 0 || (sec == 0 && nsec <= 0)) {
+        return 0;
+    }
+    int64_t ms = sec * 1000 + (nsec + 999999LL) / 1000000LL;
+    return ms > INT_MAX ? INT_MAX : (int)ms;
+}
+
+static int wait_readable(int fd, const struct timespec *deadline) {
     struct pollfd pfd;
     pfd.fd = fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
 
     for (;;) {
+        int timeout_ms = remaining_timeout_ms(deadline);
+        if (timeout_ms <= 0) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+
         int rc = poll(&pfd, 1, timeout_ms);
         if (rc < 0) {
             if (errno == EINTR) {
@@ -64,12 +103,12 @@ static int wait_readable(int fd, int timeout_ms) {
     }
 }
 
-static int recv_all(int fd, void *buf, size_t len) {
+static int recv_all(int fd, void *buf, size_t len, const struct timespec *deadline) {
     uint8_t *p = (uint8_t *)buf;
     size_t recvd = 0;
 
     while (recvd < len) {
-        if (wait_readable(fd, PM_IPC_RECV_TIMEOUT_MS) != 0) {
+        if (wait_readable(fd, deadline) != 0) {
             return -1;
         }
         ssize_t n = recv(fd, p + recvd, len - recvd, 0);
@@ -291,25 +330,35 @@ int pm_ipc_send_frame(int fd, const void *data, uint16_t size) {
     return 0;
 }
 
-int pm_ipc_recv_frame(int fd, void *buf, size_t buf_size, uint16_t *out_size) {
-    if (fd < 0 || !buf || !out_size || buf_size == 0) {
+int pm_ipc_recv_frame_timeout(int fd, void *buf, size_t buf_size, uint16_t *out_size,
+                              int timeout_ms) {
+    if (fd < 0 || !buf || !out_size || buf_size == 0 || timeout_ms <= 0) {
+        return -1;
+    }
+
+    struct timespec deadline;
+    if (set_deadline_ms(&deadline, timeout_ms) != 0) {
         return -1;
     }
 
     uint16_t size = 0;
-    if (recv_all(fd, &size, sizeof(size)) != 0) {
+    if (recv_all(fd, &size, sizeof(size), &deadline) != 0) {
         return -1;
     }
     if (size == 0 || size > PM_IPC_MAX_PAYLOAD || (size_t)size > buf_size) {
         return -1;
     }
-    if (recv_all(fd, buf, size) != 0) {
+    if (recv_all(fd, buf, size, &deadline) != 0) {
         pm_wipe(buf, buf_size);
         return -1;
     }
 
     *out_size = size;
     return 0;
+}
+
+int pm_ipc_recv_frame(int fd, void *buf, size_t buf_size, uint16_t *out_size) {
+    return pm_ipc_recv_frame_timeout(fd, buf, buf_size, out_size, PM_IPC_RECV_TIMEOUT_MS);
 }
 
 int pm_ipc_send_msg(int fd, const pm_msg_t *msg) {

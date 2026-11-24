@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -5,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cmocka.h>
@@ -208,6 +210,40 @@ static void test_socketpair_send_recv_msg(void **state) {
     close(sv[1]);
 }
 
+static void test_slow_client_hits_overall_deadline(void **state) {
+    (void)state;
+
+    int sv[2];
+    assert_int_equal(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    pid_t pid = fork();
+    assert_true(pid >= 0);
+    if (pid == 0) {
+        close(sv[1]);
+        uint8_t frame[] = {0x04, 0x00, 'a', 'b', 'c', 'd'};
+        for (size_t i = 0; i < sizeof(frame); i++) {
+            ssize_t n = send(sv[0], &frame[i], 1, 0);
+            if (n <= 0) {
+                break;
+            }
+            usleep(60000);
+        }
+        close(sv[0]);
+        _exit(0);
+    }
+
+    close(sv[0]);
+    char buf[64];
+    uint16_t out_size = 0;
+    errno = 0;
+    assert_int_equal(pm_ipc_recv_frame_timeout(sv[1], buf, sizeof(buf), &out_size, 150), -1);
+    assert_int_equal(errno, ETIMEDOUT);
+    close(sv[1]);
+
+    int status = 0;
+    assert_int_equal(waitpid(pid, &status, 0), pid);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_msg_wipe),
@@ -217,6 +253,7 @@ int main(void) {
         cmocka_unit_test(test_encode_rejects_invalid),
         cmocka_unit_test(test_decode_rejects_corrupted),
         cmocka_unit_test(test_socketpair_send_recv_msg),
+        cmocka_unit_test(test_slow_client_hits_overall_deadline),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
