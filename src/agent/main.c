@@ -3,8 +3,15 @@
 #include <stdlib.h>
 
 #include "passman/agent.h"
+#include "passman/crypto.h"
 
 int main(int argc, char **argv) {
+    pm_status st = pm_crypto_init();
+    if (st != PM_OK) {
+        fprintf(stderr, "%s: %s\n", argc > 0 ? argv[0] : "pm-agentd", pm_strerror(st));
+        return 1;
+    }
+
     if (argc < 3) {
         fprintf(stderr, "usage: %s <vault> <idle-timeout-seconds>\n", argv[0]);
         return 2;

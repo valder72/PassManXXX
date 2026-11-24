@@ -26,7 +26,7 @@
 static volatile sig_atomic_t g_stop_requested = 0;
 
 typedef struct {
-    uint8_t key[PM_KEY_LEN];
+    uint8_t key[PM_KEY_BYTES];
     int unlocked;
     struct timespec last_activity;
     unsigned idle_timeout_sec;

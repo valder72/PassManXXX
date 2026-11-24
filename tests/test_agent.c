@@ -24,16 +24,16 @@ void __wrap_pm_wipe(void *buf, size_t len) {
     }
 }
 
-int __wrap_pm_vault_open(const char *path, const char *password, uint8_t key[PM_KEY_LEN]) {
+int __wrap_pm_vault_open(const char *path, const char *password, uint8_t key[PM_KEY_BYTES]) {
     (void)path;
     if (!password || strcmp(password, "master123") != 0) {
         return -1;
     }
-    memset(key, 0xAB, PM_KEY_LEN);
+    memset(key, 0xAB, PM_KEY_BYTES);
     return 0;
 }
 
-int __wrap_pm_vault_put(const char *path, const uint8_t key[PM_KEY_LEN], const char *name,
+int __wrap_pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name,
                         const char *secret) {
     (void)path;
     (void)key;
@@ -46,7 +46,7 @@ int __wrap_pm_vault_put(const char *path, const uint8_t key[PM_KEY_LEN], const c
     return 0;
 }
 
-int __wrap_pm_vault_get(const char *path, const uint8_t key[PM_KEY_LEN], const char *name,
+int __wrap_pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name,
                         char *out, size_t out_size) {
     (void)path;
     (void)key;
@@ -57,7 +57,7 @@ int __wrap_pm_vault_get(const char *path, const uint8_t key[PM_KEY_LEN], const c
     return (n >= 0 && (size_t)n < out_size) ? 0 : -1;
 }
 
-int __wrap_pm_vault_list(const char *path, const uint8_t key[PM_KEY_LEN], pm_vault_list_cb cb,
+int __wrap_pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES], pm_vault_list_cb cb,
                          void *user_data) {
     (void)path;
     (void)key;
