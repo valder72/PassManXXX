@@ -198,6 +198,10 @@ static void ctx_free(vault_ctx *v) {
 #define MAX_OPSLIMIT 64u
 #define MAX_MEMLIMIT (1ull << 30) // 1 gb
 
+static int params_in_range(const pm_kdf_params *p) {
+    return p->opslimit <= MAX_OPSLIMIT && p->memlimit <= MAX_MEMLIMIT;
+}
+
 static pm_status parse_header(const uint8_t *file, size_t len, pm_kdf_params *params) {
     if (len < HDR_BYTES + PM_NONCE_BYTES + PM_TAG_BYTES) return PM_ERR_FORMAT;
 
@@ -207,7 +211,7 @@ static pm_status parse_header(const uint8_t *file, size_t len, pm_kdf_params *pa
 
     params->opslimit = get_le(file + OFF_OPS, 8);
     params->memlimit = get_le(file + OFF_MEM, 8);
-    if (params->opslimit > MAX_OPSLIMIT || params->memlimit > MAX_MEMLIMIT) return PM_ERR_FORMAT;
+    if (params_in_range(params) == 0) return PM_ERR_FORMAT;
 
     return PM_OK;
 }
@@ -270,7 +274,7 @@ static pm_status store(const char *path, const vault_ctx *v, const uint8_t *body
 
     size_t sealed_len = 0;
     pm_status st = pm_seal(v->record_key, body, body_len, v->header, HDR_BYTES, file + HDR_BYTES, total - HDR_BYTES, &sealed_len);
-    if (st == PM_OK) st = write_atomic(path, file, total, replace);
+    if (st == PM_OK) st = write_atomic(path, file, HDR_BYTES + sealed_len, replace);
     free(file);
 
     return st;
@@ -281,14 +285,18 @@ static int name_equals(const record_view *r, const char *name, size_t name_len) 
 }
 
 pm_status pm_vault_create(const char *path, const char *password, const pm_kdf_params *params) {
-    if (!path || !password) return PM_ERR_ARG;
+    if (!path || !password || password[0] == '\0') return PM_ERR_ARG;
 
     pm_kdf_params p;
-    if (params) p = *params;
+    if (params) {
+        p = *params;
+    }
     else {
         pm_status cst = pm_kdf_calibrate(PM_VAULT_DEFAULT_MEMLIMIT, PM_VAULT_DEFAULT_TARGET_MS, &p);
         if (cst != PM_OK) return cst;
     }
+
+    if (params_in_range(&p) == 0) return PM_ERR_ARG;
 
     vault_ctx v = {0};
     memcpy(v.header, PM_MAGIC, MAGIC_BYTES);
@@ -365,7 +373,7 @@ pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     record_view r;
     for (uint64_t i = 0; i < count; i++) {
         size_t start = off;
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {sodium_free(nb); ctx_free(&v); st = PM_ERR_CORRUPT; return st;}
         if (!name_equals(&r, name, name_len)) {
             memcpy(nb + out, v.body + start, off - start);
             out += off - start;
@@ -403,7 +411,7 @@ pm_status pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     st = PM_ERR_NOT_FOUND;
 
     for (uint64_t i = 0; i < count; i++) {
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {st = PM_ERR_CORRUPT; break;}
         if (name_equals(&r, name, name_len)) {
             if (r.secret_len >= out_size) {
                 st = PM_ERR_TOO_BIG;
@@ -433,7 +441,7 @@ pm_status pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES], pm_va
     char name[PM_MAX_NAME_LEN];
 
     for (uint64_t i = 0; i < count; i++) {
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {st = PM_ERR_CORRUPT; break;}
         memcpy(name, r.name, r.name_len);
         name[r.name_len] = '\0';
 
@@ -441,5 +449,5 @@ pm_status pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES], pm_va
     }
 
     ctx_free(&v);
-    return PM_OK;
+    return st;
 }

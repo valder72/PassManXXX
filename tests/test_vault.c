@@ -108,7 +108,7 @@ static void weak_or_huge_params_in_file_are_refused(void **state) {
     flip_byte(f->path, 12);
 
     flip_byte(f->path, 27);                    // top byte of memlimit
-    assert_int_equal(pm_vault_open(f->path, "weakpas", key), PM_ERR_FORMAT);
+    assert_int_equal(pm_vault_open(f->path, "weakpass", key), PM_ERR_FORMAT);
 }
 
 static void create_refuses_existing_file_and_is_0600(void **state) {
