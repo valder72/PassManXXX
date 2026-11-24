@@ -5,6 +5,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 # gnu11, not strict c11: mlock, sockets and termios are POSIX and hidden under -std=c11
 set(CMAKE_C_EXTENSIONS ON)
+# write build/compile_commands.json so clangd uses the same -I and flags as the compiler
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PASSMAN_BUILD_TESTS "Build cmocka unit tests" ON)
 
@@ -20,6 +22,10 @@ add_library(pm_crypto STATIC
     src/crypto/kdf.c
     src/crypto/aead.c
     src/crypto/wipe.c
+    src/crypto/init.c
+    src/crypto/random.c
+    src/crypto/keys.c
+    src/error.c
 )
 target_include_directories(pm_crypto PUBLIC include)
 target_link_libraries(pm_crypto PUBLIC PkgConfig::SODIUM)
