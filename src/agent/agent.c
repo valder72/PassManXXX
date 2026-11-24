@@ -589,10 +589,10 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
         if (pfd.revents & POLLIN) {
             int client_fd = accept(listen_fd, NULL, NULL);
             if (client_fd < 0) {
-                if (errno == EINTR) {
-                    continue;
+                if (errno != EINTR && errno != ECONNABORTED) {
+                    perror("pm-agentd: accept");
                 }
-                break;
+                continue;
             }
             if (check_peer_credentials(client_fd) == 0) {
                 handle_client(client_fd, &sess);
