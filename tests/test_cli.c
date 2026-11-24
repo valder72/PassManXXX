@@ -6,10 +6,11 @@
 #include <unistd.h>
 
 #include "passman/cli.h"
+#include "passman/error.h"
 
 /* Helper to feed string into stdin via pipe */
 static void run_with_input(const char *input, size_t input_len,
-                           char *buf, size_t buf_size, int *res) {
+                           char *buf, size_t buf_size, pm_status *res) {
     int fds[2];
     assert_int_equal(pipe(fds), 0);
 
@@ -34,7 +35,7 @@ static void run_with_input(const char *input, size_t input_len,
 static void test_read_password_normal(void **state) {
     (void)state;
     char buf[64];
-    int res = -999;
+    pm_status res = -999;
     run_with_input("my_secret_pass\n", 15, buf, sizeof(buf), &res);
     assert_int_equal(res, PM_OK);
     assert_string_equal(buf, "my_secret_pass");
@@ -43,7 +44,7 @@ static void test_read_password_normal(void **state) {
 static void test_read_password_crlf(void **state) {
     (void)state;
     char buf[64];
-    int res = -999;
+    pm_status res = -999;
     run_with_input("crlf_pass\r\n", 11, buf, sizeof(buf), &res);
     assert_int_equal(res, PM_OK);
     assert_string_equal(buf, "crlf_pass");
@@ -52,7 +53,7 @@ static void test_read_password_crlf(void **state) {
 static void test_read_password_empty(void **state) {
     (void)state;
     char buf[64];
-    int res = -999;
+    pm_status res = -999;
     run_with_input("\n", 1, buf, sizeof(buf), &res);
     assert_int_equal(res, PM_OK);
     assert_string_equal(buf, "");
@@ -61,22 +62,22 @@ static void test_read_password_empty(void **state) {
 static void test_read_password_truncated(void **state) {
     (void)state;
     char buf[8]; /* capacity is 7 chars + NUL */
-    int res = -999;
+    pm_status res = -999;
     run_with_input("1234567890\n", 11, buf, sizeof(buf), &res);
-    assert_int_equal(res, PM_ERR_TRUNCATED);
+    assert_int_equal(res, PM_ERR_TOO_BIG);
 }
 
 static void test_read_password_invalid_args(void **state) {
     (void)state;
     char buf[16];
-    assert_int_equal(pm_read_password(NULL, NULL, 16), PM_ERR_INVALID_ARG);
-    assert_int_equal(pm_read_password(NULL, buf, 0), PM_ERR_INVALID_ARG);
+    assert_int_equal(pm_read_password(NULL, NULL, 16), PM_ERR_ARG);
+    assert_int_equal(pm_read_password(NULL, buf, 0), PM_ERR_ARG);
 }
 
 static void test_read_password_eof(void **state) {
     (void)state;
     char buf[64];
-    int res = -999;
+    pm_status res = -999;
     run_with_input("", 0, buf, sizeof(buf), &res);
     assert_int_equal(res, PM_ERR_EOF);
 }
