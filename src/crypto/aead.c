@@ -35,20 +35,19 @@ pm_status pm_seal(const uint8_t record_key[PM_KEY_BYTES], const uint8_t *plain, 
 }
 
 pm_status pm_open(const uint8_t record_key[PM_KEY_BYTES], const uint8_t *sealed, size_t sealed_len, const uint8_t *ad, size_t ad_len, uint8_t *plain, size_t plain_size, size_t *plain_len) {
-    if (!record_key || !sealed || !plain_len) return PM_ERR_ARG;
-    if (!ad && ad_len != 0) return PM_ERR_ARG;
+    if (!record_key || !sealed || !plain_len || !plain) {pm_wipe(plain, plain_size); return PM_ERR_ARG;}
+    if (!ad && ad_len != 0) {pm_wipe(plain, plain_size); return PM_ERR_ARG;}
 
-    if (sealed_len < PM_NONCE_BYTES + PM_TAG_BYTES) return PM_ERR_FORMAT; // shortie
+    if (sealed_len < PM_NONCE_BYTES + PM_TAG_BYTES) {pm_wipe(plain, plain_size); return PM_ERR_FORMAT;} // shortie
 
     size_t need = sealed_len - PM_NONCE_BYTES - PM_TAG_BYTES;
-    if (plain_size < need || (need != 0 && !plain)) return PM_ERR_TOO_BIG; // big
+    if (plain_size < need || (need != 0 && !plain)) {pm_wipe(plain, plain_size); return PM_ERR_TOO_BIG;} // big
 
     const uint8_t *nonce = sealed;
     const uint8_t *ct = sealed + PM_NONCE_BYTES;
 
     unsigned long long m_len = 0;
-    if (crypto_aead_xchacha20poly1305_ietf_decrypt(plain, &m_len, NULL, ct, sealed_len - PM_NONCE_BYTES, ad, ad_len, nonce, record_key) != 0) return PM_ERR_CORRUPT; // zeroed plain by lib
-    
+    if (crypto_aead_xchacha20poly1305_ietf_decrypt(plain, &m_len, NULL, ct, sealed_len - PM_NONCE_BYTES, ad, ad_len, nonce, record_key) != 0) {pm_wipe(plain, plain_size); return PM_ERR_CORRUPT;}
     *plain_len = (size_t)m_len;
     return PM_OK;
 }

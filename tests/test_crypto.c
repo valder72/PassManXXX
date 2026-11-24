@@ -1,6 +1,5 @@
 #include <stdarg.h>
 #include <stddef.h>
-#include <setjmp.h>
 #include <cmocka.h>
 #include <string.h>
 #include <time.h>
@@ -157,21 +156,21 @@ static void seal_open_round_trip_and_fresh_nonce(void **state) {
     (void)state;
     const uint8_t *msg = (const uint8_t *)"popolni steam pls";
     const uint8_t *ad = (const uint8_t *)"bobrovnik";
-    uint8_t s1[PM_SEALED_SIZE(13)], s2[PM_SEALED_SIZE(13)];
+    uint8_t s1[PM_SEALED_SIZE(17)], s2[PM_SEALED_SIZE(17)];
     size_t l1 = 0, l2 = 0;
     memset(s1, 0, sizeof s1);
     memset(s2, 0, sizeof s2);
 
-    assert_int_equal(pm_seal(AEAD_KEY, msg, 13, ad, 6, s1, sizeof s1, &l1), PM_OK);
-    assert_int_equal(pm_seal(AEAD_KEY, msg, 13, ad, 6, s2, sizeof s2, &l2), PM_OK);
-    assert_int_equal(l1, PM_SEALED_SIZE(13));
+    assert_int_equal(pm_seal(AEAD_KEY, msg, 17, ad, 9, s1, sizeof s1, &l1), PM_OK);
+    assert_int_equal(pm_seal(AEAD_KEY, msg, 17, ad, 9, s2, sizeof s2, &l2), PM_OK);
+    assert_int_equal(l1, PM_SEALED_SIZE(17));
     assert_memory_not_equal(s1, s2, PM_NONCE_BYTES); // same input, different nonce => different output
 
-    uint8_t plain[13];
+    uint8_t plain[17];
     size_t plain_len = 0;
-    assert_int_equal(pm_open(AEAD_KEY, s1, l1, ad, 6, plain, sizeof plain, &plain_len), PM_OK);
-    assert_int_equal(plain_len, 13);
-    assert_memory_equal(plain, msg, 13);
+    assert_int_equal(pm_open(AEAD_KEY, s1, l1, ad, 9, plain, sizeof plain, &plain_len), PM_OK);
+    assert_int_equal(plain_len, 17);
+    assert_memory_equal(plain, msg, 17);
     // not failing thanks god pro encryptor 1337
 }
 
@@ -182,14 +181,14 @@ static void open_rejects_tampering(void **state) {
 
     memcpy(s, KAT_SEALED, sizeof s);
     s[PM_NONCE_BYTES] ^= 0x01;
-    assert_int_equal(pm_open(AEAD_KEY, s, sizeof s, (const uint8_t *)"hacker", 6, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
+    assert_int_equal(pm_open(AEAD_KEY, s, sizeof s, (const uint8_t *)"github", 6, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
 
     // ad deosn't match
-    assert_int_equal(pm_open(AEAD_KEY, KAT_SEALED, sizeof KAT_SEALED, (const uint8_t *)"nothacker", 9, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
+    assert_int_equal(pm_open(AEAD_KEY, KAT_SEALED, sizeof KAT_SEALED, (const uint8_t *)"notgithub   ", 9, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
 
     // key is wrong
     uint8_t other[PM_KEY_BYTES] = {0};
-    assert_int_equal(pm_open(other, KAT_SEALED, sizeof KAT_SEALED, (const uint8_t *)"hacker", 6, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
+    assert_int_equal(pm_open(other, KAT_SEALED, sizeof KAT_SEALED, (const uint8_t *)"github", 6, plain, sizeof plain, &plain_len), PM_ERR_CORRUPT);
 }
 
 static void aead_size_errors(void **state) {
