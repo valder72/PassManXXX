@@ -1,4 +1,3 @@
-#include <bits/time.h>
 #include <sodium/crypto_pwhash.h>
 #include <sodium/crypto_pwhash_argon2id.h>
 #include <stdint.h>
@@ -27,7 +26,7 @@ pm_status pm_kdf_derive(const char *password, size_t password_len, const uint8_t
     if (password == NULL || !salt || !master_key) return PM_ERR_ARG;
 
     pm_status st = check_params(params);
-    if (st != PM_OK) return PM_ERR_ARG;
+    if (st != PM_OK) return st;
 
     // on fail, libsodioum fills masterkey with zero, so we don't need to do much
     if (crypto_pwhash(master_key, PM_KEY_BYTES, password, password_len, salt, params->opslimit, (size_t)params->memlimit, crypto_pwhash_ALG_ARGON2ID13) != 0) return PM_ERR_NOMEM;
