@@ -138,7 +138,7 @@ int main(void) {
         cmocka_unit_test_setup_teardown(wrong_password_and_tampering, setup, teardown),
         cmocka_unit_test_setup_teardown(weak_or_huge_params_in_file_are_refused, setup, teardown),
         cmocka_unit_test_setup_teardown(create_refuses_existing_file_and_is_0600, setup, teardown),
-        cmocka_unit_test_setup_teardown(size_limits, setup, teardown),
+        cmocka_unit_test_setup_teardown(size_limits, setup, teardown)
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <sodium/utils.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
