@@ -4,4 +4,3 @@ build/
 *.so
 compile_commands.json
 .cache/
-argontest.py
