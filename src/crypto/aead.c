@@ -41,7 +41,7 @@ pm_status pm_open(const uint8_t record_key[PM_KEY_BYTES], const uint8_t *sealed,
     if (sealed_len < PM_NONCE_BYTES + PM_TAG_BYTES) {pm_wipe(plain, plain_size); return PM_ERR_FORMAT;} // shortie
 
     size_t need = sealed_len - PM_NONCE_BYTES - PM_TAG_BYTES;
-    if (plain_size < need || (need != 0 && !plain)) {pm_wipe(plain, plain_size); return PM_ERR_TOO_BIG;} // big
+    if (plain_size < need) {pm_wipe(plain, plain_size); return PM_ERR_TOO_BIG;} // big
 
     const uint8_t *nonce = sealed;
     const uint8_t *ct = sealed + PM_NONCE_BYTES;

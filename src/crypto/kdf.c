@@ -66,6 +66,7 @@ pm_status pm_kdf_calibrate(uint64_t memlimit, unsigned int target_ms, pm_kdf_par
     if (a < 0 || b < 0) return PM_ERR_NOMEM;
 
     double elapsed = a < b ? a : b;
+    if (elapsed <= 0.0) return PM_ERR_ARG;
 
     // time scales linearly with number of passes, so scaling is according. We do not go below the minimum. We do not need perfect 1 second, vault creating can't be an hour waiting
 
@@ -73,7 +74,7 @@ pm_status pm_kdf_calibrate(uint64_t memlimit, unsigned int target_ms, pm_kdf_par
     double ops = (double)PM_KDF_MIN_OPS * target / elapsed;
 
     if (ops > (double)crypto_pwhash_argon2id_OPSLIMIT_MAX) ops = (double)crypto_pwhash_argon2id_OPSLIMIT_MAX;
-    if (ops > (double)PM_KDF_MIN_OPS) p.opslimit = ops;
+    if (ops > (double)PM_KDF_MIN_OPS) p.opslimit = (uint64_t)ops;
 
     *out = p;
     return PM_OK;

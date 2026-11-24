@@ -1,6 +1,7 @@
 #include <sodium.h>
 
 #include "passman/crypto.h"
+#include "passman/error.h"
 
 // These settings are fixed forever, because changing context or key ids changes every subkey of every vault
 #define PM_KDF_CONTEXT "PMXVAULT" // it's okay that is it viewable in source code as this is not a secret
@@ -42,5 +43,8 @@ pm_status pm_key_check_verify(const uint8_t check_key[PM_KEY_BYTES], const uint8
 
     if (st != PM_OK) return st;
 
-    return sodium_memcmp(actual, expected, PM_CHECK_BYTES) == 0 ? PM_OK : PM_ERR_WRONG_PASS;
+    st = sodium_memcmp(actual, expected, PM_CHECK_BYTES) == 0 ? PM_OK : PM_ERR_WRONG_PASS;
+    pm_wipe(actual, PM_CHECK_BYTES);
+    
+    return st;
 }
