@@ -47,6 +47,7 @@ target_link_libraries(pm_agent PUBLIC pm_vault)
 add_library(pm_cli STATIC
     src/cli/cli.c
     src/cli/term.c
+    src/cli/totp.c
 )
 target_include_directories(pm_cli PUBLIC include)
 target_link_libraries(pm_cli PUBLIC pm_agent)

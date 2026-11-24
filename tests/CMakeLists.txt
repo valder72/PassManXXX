@@ -29,3 +29,9 @@ target_link_options(test_agent PRIVATE
     -Wl,--wrap=pm_vault_list
 )
 add_test(NAME agent COMMAND test_agent)
+
+# TOTP: RFC 4226 / RFC 6238 / RFC 4648 / RFC 2202 vectors
+add_executable(test_totp test_totp.c)
+target_link_libraries(test_totp PRIVATE pm_cli PkgConfig::CMOCKA)
+add_test(NAME totp COMMAND test_totp)
+
