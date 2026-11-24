@@ -23,6 +23,8 @@ add_library(pm_crypto STATIC
     src/crypto/aead.c
     src/crypto/wipe.c
     src/crypto/init.c
+    src/crypto/random.c
+    src/crypto/keys.c
     src/error.c
 )
 target_include_directories(pm_crypto PUBLIC include)

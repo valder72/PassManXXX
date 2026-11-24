@@ -16,6 +16,7 @@
 #define PM_NONCE_BYTES 24u  // XChaCha20-Poly1305 nonce, random per record
 #define PM_TAG_BYTES 16u  // Poly1305 authentication tag 
 #define PM_CHECK_BYTES 32u  // key check value stored in the vault header
+#define PM_MAX_SECRET_LEN 1024u // max user password len
 
 // size of one sealed record
 #define PM_SEALED_SIZE(plain_len) ((plain_len) + PM_NONCE_BYTES + PM_TAG_BYTES)
@@ -85,7 +86,7 @@ pm_status pm_seal(const uint8_t record_key[PM_KEY_BYTES],
 
 
 // decrypt and authenticate a record produced by pm_seal with the same associated data
-// on failure nothing is written to plain
+// on failure plain is zeroed
 // the caller must wipe plain with pm_wipe as soon as it is no longer needed
 // returns PM_OK, PM_ERR_ARG, PM_ERR_FORMAT (shorter than nonce + tag), PM_ERR_TOO_BIG (plain_size too small), or PM_ERR_CORRUPT (tag mismatch)
 pm_status pm_open(const uint8_t record_key[PM_KEY_BYTES],

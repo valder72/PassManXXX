@@ -13,7 +13,7 @@
 #include "passman/crypto.h"
 
 #define PM_MAGIC "PASSMANX"
-#define PM_VERSION 1u
+#define PM_VERSION 1u   
 
 typedef struct {
     uint8_t  salt[PM_SALT_BYTES];
@@ -33,5 +33,11 @@ int pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES],
 /* Fetch one record into `out` (NUL-terminated). Caller wipes it afterwards. */
 int pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES],
                  const char *name, char *out, size_t out_size);
+
+// Callback invoked for each record name in the vault. Return non-zero to stop
+typedef int (*pm_vault_list_cb)(const char *name, void *user_data);
+
+// Enumerate all record names in the vault without exposing secrets
+int pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES], pm_vault_list_cb cb, void *user_data);
 
 #endif /* PASSMAN_VAULT_H */

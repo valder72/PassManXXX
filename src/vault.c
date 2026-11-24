@@ -23,3 +23,9 @@ int pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES],
     (void)path; (void)key; (void)name; (void)out; (void)out_size;
     return -1;
 }
+
+int pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES],
+                  pm_vault_list_cb cb, void *user_data) {
+    (void)path; (void)key; (void)cb; (void)user_data;
+    return -1;
+}
