@@ -159,11 +159,13 @@ static void seal_open_round_trip_and_fresh_nonce(void **state) {
     const uint8_t *ad = (const uint8_t *)"bobrovnik";
     uint8_t s1[PM_SEALED_SIZE(13)], s2[PM_SEALED_SIZE(13)];
     size_t l1 = 0, l2 = 0;
+    memset(s1, 0, sizeof s1);
+    memset(s2, 0, sizeof s2);
 
     assert_int_equal(pm_seal(AEAD_KEY, msg, 13, ad, 6, s1, sizeof s1, &l1), PM_OK);
     assert_int_equal(pm_seal(AEAD_KEY, msg, 13, ad, 6, s2, sizeof s2, &l2), PM_OK);
     assert_int_equal(l1, PM_SEALED_SIZE(13));
-    assert_memory_not_equal(s1, s2, l1); // same input, different nonce => different output
+    assert_memory_not_equal(s1, s2, PM_NONCE_BYTES); // same input, different nonce => different output
 
     uint8_t plain[13];
     size_t plain_len = 0;

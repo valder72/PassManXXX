@@ -21,6 +21,7 @@ pm_status pm_seal(const uint8_t record_key[PM_KEY_BYTES], const uint8_t *plain, 
     if (out_size < PM_SEALED_SIZE(plain_len)) return PM_ERR_TOO_BIG;
 
     uint8_t *nonce = out; // first 24 bytes
+    pm_random(nonce, PM_NONCE_BYTES); // I forgot this line and this was like critical vulnerability, tests didn't even catch that
     uint8_t *ct = out + PM_NONCE_BYTES; // rest (ciphertext and tag)
 
     unsigned long long ct_len = 0;
