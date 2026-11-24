@@ -59,60 +59,65 @@ static int install_signal_handlers(void) {
     return 0;
 }
 
-static int is_owned_writable_dir(const char *dir, int use_lstat, int require_0700) {
-    struct stat st;
-    int rc = use_lstat ? lstat(dir, &st) : stat(dir, &st);
-    if (rc != 0 || !S_ISDIR(st.st_mode) || st.st_uid != getuid()) {
-        return 0;
-    }
-    if (require_0700 && (st.st_mode & 0777) != 0700) {
-        if (chmod(dir, 0700) != 0) {
-            return 0;
-        }
-    }
-    return access(dir, W_OK | X_OK) == 0;
-}
-
-static int format_socket_in_dir(const char *dir, char *out, size_t out_size) {
-    size_t len = strlen(dir);
-    while (len > 1 && dir[len - 1] == '/') {
-        len--;
-    }
-    int n = snprintf(out, out_size, "%.*s/passman.sock", (int)len, dir);
-    return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
-}
-
 static int resolve_socket_path(char *out, size_t out_size) {
     const char *override = getenv("PASSMAN_SOCKET");
     if (override && override[0] != '\0') {
         int n = snprintf(out, out_size, "%s", override);
-        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+        if (n < 0 || (size_t)n >= out_size) {
+            return -1;
+        }
+        return 0;
     }
 
+    struct stat st;
     const char *xdg_dir = getenv("XDG_RUNTIME_DIR");
-    if (xdg_dir && xdg_dir[0] != '\0' && is_owned_writable_dir(xdg_dir, 0, 0)) {
-        return format_socket_in_dir(xdg_dir, out, out_size);
+    if (xdg_dir && xdg_dir[0] != '\0') {
+        if (stat(xdg_dir, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == getuid() &&
+            access(xdg_dir, W_OK | X_OK) == 0) {
+            size_t len = strlen(xdg_dir);
+            int n;
+            if (xdg_dir[len - 1] == '/') {
+                n = snprintf(out, out_size, "%spassman.sock", xdg_dir);
+            } else {
+                n = snprintf(out, out_size, "%s/passman.sock", xdg_dir);
+            }
+            if (n < 0 || (size_t)n >= out_size) {
+                return -1;
+            }
+            return 0;
+        }
     }
 
-    char run_dir[64];
-    int rn = snprintf(run_dir, sizeof(run_dir), "/run/user/%u", (unsigned)getuid());
-    if (rn > 0 && (size_t)rn < sizeof(run_dir) && is_owned_writable_dir(run_dir, 0, 0)) {
+    char dir[64];
+    snprintf(dir, sizeof(dir), "/run/user/%u", (unsigned)getuid());
+    if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == getuid() &&
+        access(dir, W_OK | X_OK) == 0) {
         int n = snprintf(out, out_size, PM_SOCKET_PATH, (unsigned)getuid());
-        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+        if (n < 0 || (size_t)n >= out_size) {
+            return -1;
+        }
+        return 0;
     }
 
-    char fallback_dir[64];
-    int fn = snprintf(fallback_dir, sizeof(fallback_dir), "/tmp/passman-%u", (unsigned)getuid());
-    if (fn < 0 || (size_t)fn >= sizeof(fallback_dir)) {
+    snprintf(dir, sizeof(dir), "/tmp/passman-%u", (unsigned)getuid());
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
         return -1;
     }
-    if (mkdir(fallback_dir, 0700) != 0 && errno != EEXIST) {
+    if (lstat(dir, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != getuid()) {
         return -1;
     }
-    if (!is_owned_writable_dir(fallback_dir, 1, 1)) {
+    if ((st.st_mode & 0777) != 0700 && chmod(dir, 0700) != 0) {
         return -1;
     }
-    return format_socket_in_dir(fallback_dir, out, out_size);
+    if (access(dir, W_OK | X_OK) != 0) {
+        return -1;
+    }
+
+    int n = snprintf(out, out_size, "%s/passman.sock", dir);
+    if (n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
+    return 0;
 }
 
 static int is_socket_live(const char *sock_path) {
@@ -232,39 +237,31 @@ static void set_error(pm_msg_t *resp, const char *text) {
 }
 
 /*
- * Record payload format stored in the vault as a NUL-terminated string:
- *   "<email>\t<username>\t<phone>\t<password>"
- * Backslash-escaping ("\\", "\t", "\n", "\r") preserves tabs, newlines,
- * and backslashes in any field without colliding with the '\t' delimiter.
+ * Format in vault: "email\tusername\tphone\tpassword".
+ * '\t', '\n', '\r' and '\\' inside fields are escaped with '\'.
  */
-static int append_escaped(char *out, size_t out_size, size_t *pos, const char *src) {
-    for (const char *p = src; *p != '\0'; p++) {
-        char esc = 0;
-        switch (*p) {
-        case '\\':
-            esc = '\\';
-            break;
-        case '\t':
-            esc = 't';
-            break;
-        case '\n':
-            esc = 'n';
-            break;
-        case '\r':
-            esc = 'r';
-            break;
-        default:
-            break;
-        }
-        size_t need = esc ? 2u : 1u;
-        if (*pos + need >= out_size) {
-            return -1;
-        }
-        if (esc) {
+static int append_escaped_field(char *out, size_t out_size, size_t *pos, const char *src) {
+    for (size_t i = 0; src[i] != '\0'; i++) {
+        char c = src[i];
+        if (c == '\\' || c == '\t' || c == '\n' || c == '\r') {
+            if (*pos + 2 >= out_size) {
+                return -1;
+            }
             out[(*pos)++] = '\\';
-            out[(*pos)++] = esc;
+            if (c == '\\') {
+                out[(*pos)++] = '\\';
+            } else if (c == '\t') {
+                out[(*pos)++] = 't';
+            } else if (c == '\n') {
+                out[(*pos)++] = 'n';
+            } else {
+                out[(*pos)++] = 'r';
+            }
         } else {
-            out[(*pos)++] = *p;
+            if (*pos + 1 >= out_size) {
+                return -1;
+            }
+            out[(*pos)++] = c;
         }
     }
     return 0;
@@ -275,21 +272,28 @@ static int pack_secret(const pm_msg_t *req, char *out, size_t out_size) {
         return -1;
     }
 
-    const char *fields[4] = {req->email, req->username, req->phone, req->password};
     size_t pos = 0;
+    if (append_escaped_field(out, out_size, &pos, req->email) != 0 || pos + 1 >= out_size) {
+        pm_wipe(out, out_size);
+        return -1;
+    }
+    out[pos++] = '\t';
 
-    for (size_t i = 0; i < 4; i++) {
-        if (i > 0) {
-            if (pos + 1u >= out_size) {
-                pm_wipe(out, out_size);
-                return -1;
-            }
-            out[pos++] = '\t';
-        }
-        if (append_escaped(out, out_size, &pos, fields[i]) != 0) {
-            pm_wipe(out, out_size);
-            return -1;
-        }
+    if (append_escaped_field(out, out_size, &pos, req->username) != 0 || pos + 1 >= out_size) {
+        pm_wipe(out, out_size);
+        return -1;
+    }
+    out[pos++] = '\t';
+
+    if (append_escaped_field(out, out_size, &pos, req->phone) != 0 || pos + 1 >= out_size) {
+        pm_wipe(out, out_size);
+        return -1;
+    }
+    out[pos++] = '\t';
+
+    if (append_escaped_field(out, out_size, &pos, req->password) != 0) {
+        pm_wipe(out, out_size);
+        return -1;
     }
 
     out[pos] = '\0';
@@ -304,30 +308,23 @@ static int unpack_field(char *dst, size_t dst_size, const char *start, size_t le
     size_t out_i = 0;
     for (size_t i = 0; i < len; i++) {
         char ch = start[i];
-        if (ch == '\\' && i + 1u < len) {
-            char decoded = 0;
-            switch (start[i + 1u]) {
-            case '\\':
-                decoded = '\\';
-                break;
-            case 't':
-                decoded = '\t';
-                break;
-            case 'n':
-                decoded = '\n';
-                break;
-            case 'r':
-                decoded = '\r';
-                break;
-            default:
-                break;
-            }
-            if (decoded != 0) {
-                ch = decoded;
+        if (ch == '\\' && i + 1 < len) {
+            char next = start[i + 1];
+            if (next == '\\') {
+                ch = '\\';
+                i++;
+            } else if (next == 't') {
+                ch = '\t';
+                i++;
+            } else if (next == 'n') {
+                ch = '\n';
+                i++;
+            } else if (next == 'r') {
+                ch = '\r';
                 i++;
             }
         }
-        if (out_i + 1u >= dst_size) {
+        if (out_i + 1 >= dst_size) {
             pm_wipe(dst, dst_size);
             return -1;
         }
