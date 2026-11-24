@@ -35,3 +35,8 @@ add_executable(test_totp test_totp.c)
 target_link_libraries(test_totp PRIVATE pm_cli PkgConfig::CMOCKA)
 add_test(NAME totp COMMAND test_totp)
 
+# CLI argument parser (pure function)
+add_executable(test_cli_args test_cli_args.c)
+target_link_libraries(test_cli_args PRIVATE pm_cli PkgConfig::CMOCKA)
+add_test(NAME cli_args COMMAND test_cli_args)
+

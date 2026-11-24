@@ -46,6 +46,7 @@ target_link_libraries(pm_agent PUBLIC pm_vault)
 # ---- cli library: argument parsing, terminal I/O ----
 add_library(pm_cli STATIC
     src/cli/cli.c
+    src/cli/args.c
     src/cli/term.c
     src/cli/totp.c
 )
