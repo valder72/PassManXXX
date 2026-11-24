@@ -133,13 +133,11 @@ static void test_agent_full_lifecycle(void **state) {
     pm_msg_t req;
     pm_msg_t resp;
 
-    /* PING */
     pm_msg_wipe(&req);
     req.type = PM_MSG_PING;
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_OK);
 
-    /* GET while locked */
     pm_msg_wipe(&req);
     req.type = PM_MSG_GET;
     snprintf(req.site, sizeof(req.site), "%s", "github");
@@ -147,27 +145,23 @@ static void test_agent_full_lifecycle(void **state) {
     assert_int_equal(resp.type, PM_MSG_ERR);
     assert_string_equal(resp.error, "vault is locked");
 
-    /* LIST while locked */
     collected_sites_t col;
     memset(&col, 0, sizeof(col));
     assert_int_equal(pm_agent_list(sock_path, collect_site_cb, &col), -1);
     assert_int_equal(col.count, 0);
 
-    /* UNLOCK with wrong password */
     pm_msg_wipe(&req);
     req.type = PM_MSG_UNLOCK;
     snprintf(req.password, sizeof(req.password), "%s", "wrong");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
 
-    /* UNLOCK with valid password */
     pm_msg_wipe(&req);
     req.type = PM_MSG_UNLOCK;
     snprintf(req.password, sizeof(req.password), "%s", "master123");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_OK);
 
-    /* PUT record */
     pm_msg_wipe(&req);
     req.type = PM_MSG_PUT;
     snprintf(req.site, sizeof(req.site), "%s", "github");
@@ -178,14 +172,12 @@ static void test_agent_full_lifecycle(void **state) {
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_OK);
 
-    /* LIST site names only (no secrets exposed) */
     memset(&col, 0, sizeof(col));
     assert_int_equal(pm_agent_list(sock_path, collect_site_cb, &col), 0);
     assert_int_equal(col.count, 2);
     assert_string_equal(col.sites[0], "github");
     assert_string_equal(col.sites[1], "gmail");
 
-    /* GET record */
     pm_msg_wipe(&req);
     req.type = PM_MSG_GET;
     snprintf(req.site, sizeof(req.site), "%s", "github");
@@ -197,7 +189,6 @@ static void test_agent_full_lifecycle(void **state) {
     assert_string_equal(resp.phone, "+380991112233");
     assert_string_equal(resp.password, "s3cr3t");
 
-    /* PUT & GET record with tabs, newlines, and backslashes */
     pm_msg_wipe(&req);
     req.type = PM_MSG_PUT;
     snprintf(req.site, sizeof(req.site), "%s", "special");
@@ -218,7 +209,6 @@ static void test_agent_full_lifecycle(void **state) {
     assert_string_equal(resp.phone, "+380");
     assert_string_equal(resp.password, "line1\nline2\r\n\t\\end");
 
-    /* LOCK and verify locked */
     pm_msg_wipe(&req);
     req.type = PM_MSG_LOCK;
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
@@ -230,7 +220,6 @@ static void test_agent_full_lifecycle(void **state) {
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
 
-    /* UNLOCK again and verify idle timeout (1 sec) locks automatically */
     pm_msg_wipe(&req);
     req.type = PM_MSG_UNLOCK;
     snprintf(req.password, sizeof(req.password), "%s", "master123");
@@ -246,7 +235,6 @@ static void test_agent_full_lifecycle(void **state) {
     assert_int_equal(resp.type, PM_MSG_ERR);
     assert_string_equal(resp.error, "vault is locked");
 
-    /* STOP and verify clean exit + socket removal */
     assert_int_equal(pm_agent_stop(sock_path), 0);
 
     int status = 0;

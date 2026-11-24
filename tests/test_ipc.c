@@ -163,18 +163,15 @@ static void test_decode_rejects_corrupted(void **state) {
     assert_int_equal(pm_msg_decode(buf, 2u, &out), -1);
     assert_int_equal(pm_msg_decode(buf, (size_t)(len - 1), &out), -1);
 
-    /* Trailing byte included in declared payload_size */
     uint16_t bloated_size = (uint16_t)(len - sizeof(msg_header_t) + 1u);
     memcpy(buf, &bloated_size, sizeof(bloated_size));
     buf[len] = 'x';
     assert_int_equal(pm_msg_decode(buf, (size_t)(len + 1), &out), -1);
 
-    /* Zero payload size */
     uint16_t zero = 0;
     memcpy(buf, &zero, sizeof(zero));
     assert_int_equal(pm_msg_decode(buf, (size_t)len, &out), -1);
 
-    /* Oversized field length inside payload */
     uint16_t psize = 3u;
     uint16_t bad_field_len = 500u;
     memcpy(buf, &psize, sizeof(psize));

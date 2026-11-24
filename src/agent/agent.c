@@ -236,10 +236,6 @@ static void set_error(pm_msg_t *resp, const char *text) {
     snprintf(resp->error, sizeof(resp->error), "%s", text);
 }
 
-/*
- * Format in vault: "email\tusername\tphone\tpassword".
- * '\t', '\n', '\r' and '\\' inside fields are escaped with '\'.
- */
 static int append_escaped_field(char *out, size_t out_size, size_t *pos, const char *src) {
     for (size_t i = 0; src[i] != '\0'; i++) {
         char c = src[i];
