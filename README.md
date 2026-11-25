@@ -148,7 +148,7 @@ passman stop
 
 ## Configuration & Defaults
 
-- **Vault file path:** `$PASSMAN_VAULT`, else `$XDG_DATA_HOME/passman/vault.pmx`, else `~/.local/share/passman/vault.pmx`. Use `-v PATH` to override for a command.
+- **Vault file path:** `$PASSMAN_VAULT`, else `$XDG_DATA_HOME/passman/vault.pmx`, else `~/.local/share/passman/vault.pmx`. Use `-v PATH` to override it. There is one agent per user and it serves the vault and idle timeout it was started with, so `-v` and `-t` are refused while it runs: run `passman stop` first to switch.
 - **Agent socket path:** `$PASSMAN_SOCKET`, else `$XDG_RUNTIME_DIR/passman.sock`, else `/run/user/<uid>/passman.sock`, or `/tmp/passman-<uid>/passman.sock` if `/run/user` is unavailable (for example, in containers).
 - **Agent log file:** if `passman unlock` fails to start `pm-agentd`, the agent error output is saved to `<socket_path>.log`.
 - **Exit codes (`passman`):** `0` ok, `1` error, `2` invalid command-line arguments.
