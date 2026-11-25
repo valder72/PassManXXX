@@ -40,6 +40,7 @@ static void defaults(void **state) {
     assert_int_equal(a.cmd, PM_CMD_UNLOCK);
     assert_null(a.vault_path);
     assert_int_equal(a.timeout_sec, PM_CLI_DEFAULT_TIMEOUT);
+    assert_false(a.timeout_set); // default, not asked for
     assert_int_equal(a.length, PM_CLI_DEFAULT_LENGTH);
     assert_false(a.generate);
     assert_false(a.password_only);
@@ -65,8 +66,10 @@ static void unlock_timeout(void **state) {
     pm_cli_args a;
     assert_int_equal(PARSE(&a, "unlock", "-t", "60"), PM_OK);
     assert_int_equal(a.timeout_sec, 60);
+    assert_true(a.timeout_set);
     assert_int_equal(PARSE(&a, "unlock", "--timeout=0"), PM_OK); // 0 = never lock
     assert_int_equal(a.timeout_sec, 0);
+    assert_true(a.timeout_set);
 
     assert_int_equal(PARSE(&a, "unlock", "-t", "86401"), PM_ERR_ARG);
     assert_int_equal(PARSE(&a, "unlock", "-t", "-5"), PM_ERR_ARG);

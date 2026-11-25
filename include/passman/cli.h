@@ -72,6 +72,7 @@ typedef struct {
     const char *vault_path; /* -v/--vault, NULL = default location */
     const char *name;       /* record / totp name, points into argv */
     unsigned timeout_sec;   /* unlock -t/--timeout                  */
+    int timeout_set;        /* -t was given, not just the default   */
     unsigned length;        /* add -g / gen: -l/--length            */
     int generate;           /* add -g/--generate                    */
     int no_symbols;         /* add -g / gen: --no-symbols           */

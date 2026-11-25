@@ -401,6 +401,35 @@ static void unlock_starts_agent_once(void **state) {
     type_in(1, MASTER);
     assert_int_equal(run(1, "unlock"), 0);
     assert_int_equal(agent.spawn_calls, 1);
+    // its timeout is unknown here, so no "locks after 300 s" from the default
+    assert_null(strstr(err_text, "locks after"));
+}
+
+static void running_agent_refuses_vault_and_timeout(void **state) {
+    (void)state;
+    agent.unlocked = 0;
+
+    // -t / -v cannot change an agent that already runs: refuse before asking
+    // for the master password, so it never goes to an agent with another vault
+    assert_int_equal(run(3, "unlock", "-t", "60"), 1);
+    assert_non_null(strstr(err_text, "already running"));
+    assert_non_null(strstr(err_text, "passman stop"));
+    assert_int_equal(run(3, "-v", vault_file, "unlock"), 1);
+    assert_int_equal(password_reads, 0);
+    assert_int_equal(agent.unlock_calls, 0);
+
+    agent.unlocked = 1;
+    assert_int_equal(run(4, "-v", vault_file, "get", "github"), 1);
+    assert_int_equal(agent.get_calls, 0);
+
+    // stop does not care which vault it is; afterwards -v and -t work
+    assert_int_equal(run(3, "-v", vault_file, "stop"), 0);
+    assert_false(agent.running);
+    type_in(1, MASTER);
+    assert_int_equal(run(5, "-v", vault_file, "unlock", "-t", "60"), 0);
+    assert_int_equal(agent.spawn_calls, 1);
+    assert_true(agent.unlocked);
+    assert_non_null(strstr(err_text, "60 s"));
 }
 
 static void unlock_wrong_password(void **state) {
@@ -568,6 +597,7 @@ int main(void) {
         T(add_generate),
         T(add_when_locked),
         T(unlock_starts_agent_once),
+        T(running_agent_refuses_vault_and_timeout),
         T(unlock_wrong_password),
         T(unlock_ctrl_c_sends_nothing),
         T(unlock_without_vault),

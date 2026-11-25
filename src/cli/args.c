@@ -165,6 +165,7 @@ pm_status pm_cli_parse(int argc, char **argv, pm_cli_args *args, char *err, size
                 return fail(err, err_size, "bad timeout '%s' (0..%u seconds, 0 = never)", val,
                             PM_CLI_MAX_TIMEOUT);
             }
+            args->timeout_set = 1;
             seen |= OPT_TIMEOUT;
         } else if (IS("-l", "--length")) {
             if (parse_number(val, PM_CLI_MIN_LENGTH, PM_CLI_MAX_LENGTH, &args->length) != 0) {

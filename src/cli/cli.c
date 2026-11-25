@@ -285,7 +285,24 @@ static int start_agent(cli_ctx *c) {
     return -1;
 }
 
+/* There is one agent per user (one socket), and it serves the vault and idle
+ * timeout it was started with. PING does not say which ones, so while it runs
+ * an explicit -v or -t cannot be honoured: refuse instead of sending the
+ * master password to an agent that holds another vault. Returns 0 to go on. */
+static int refuse_options_for_running_agent(cli_ctx *c) {
+    if (c->args->vault_path == NULL && !c->args->timeout_set) {
+        return 0;
+    }
+    if (!agent_alive(c)) {
+        return 0;
+    }
+    say(c, "pm-agentd is already running and keeps the vault and timeout it was started with");
+    fputs("hint: run 'passman stop' first to use -v or -t\n", c->err);
+    return -1;
+}
+
 static int cmd_unlock(cli_ctx *c) {
+    int started = 0;
     if (!agent_alive(c)) {
         if (access(c->vault, R_OK) != 0) {
             say(c, "no vault at %s, create one with 'passman init'", c->vault);
@@ -294,6 +311,7 @@ static int cmd_unlock(cli_ctx *c) {
         if (start_agent(c) != 0) {
             return EXIT_FAIL;
         }
+        started = 1;
     }
 
     pm_msg_t req, resp;
@@ -323,7 +341,8 @@ static int cmd_unlock(cli_ctx *c) {
         say(c, "unlock failed: wrong password or damaged vault");
         return EXIT_FAIL;
     }
-    if (c->args->timeout_sec == 0) {
+    /* the timeout is known only for an agent we started just now */
+    if (!started || c->args->timeout_sec == 0) {
         fputs("unlocked\n", c->err);
     } else {
         fprintf(c->err, "unlocked (locks after %u s idle)\n", c->args->timeout_sec);
@@ -673,6 +692,11 @@ int pm_cli_run(int argc, char **argv, FILE *out, FILE *err) {
     }
     if (pm_socket_path(c.sock, sizeof c.sock) != 0) {
         say(&c, "cannot find a directory for the agent socket");
+        return EXIT_FAIL;
+    }
+    /* stop and status do not depend on which vault the agent holds */
+    if (args.cmd != PM_CMD_STOP && args.cmd != PM_CMD_STATUS &&
+        refuse_options_for_running_agent(&c) != 0) {
         return EXIT_FAIL;
     }
 

@@ -57,7 +57,9 @@ passman stop                    # agent forgets the key and exits
 
 Exit codes: `0` ok, `1` error, `2` bad command line. The vault lives at
 `$PASSMAN_VAULT`, else `$XDG_DATA_HOME/passman/vault.pmx`, else
-`~/.local/share/passman/vault.pmx`; `-v PATH` overrides it.
+`~/.local/share/passman/vault.pmx`; `-v PATH` overrides it. There is one agent per
+user and it serves the vault and idle timeout it was started with, so `-v` and
+`-t` are refused while it runs: `passman stop` first to switch.
 
 When `passman unlock` starts `pm-agentd`, the agent is detached from the
 terminal and its error messages go to the socket path plus `.log`, usually
