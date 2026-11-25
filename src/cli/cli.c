@@ -355,30 +355,34 @@ static int cmd_status(cli_ctx *c) {
     return EXIT_FAIL; /* non-zero so scripts can test it */
 }
 
-/* Does a record exist? 1 yes, 0 no, -1 agent problem (already reported). */
+typedef struct {
+    const char *site;
+    int found;
+} exists_ctx;
+
+static int exists_cb(const char *site, void *user_data) {
+    exists_ctx *e = user_data;
+    if (strcmp(site, e->site) == 0) {
+        e->found = 1;
+    }
+    return 0; /* non-zero would make pm_agent_list report a failure */
+}
+
+/* Does a record exist? 1 yes, 0 no, -1 agent problem (already reported).
+ * Asks for the name list instead of GET, so no secret crosses the socket or
+ * lands in CLI memory just to answer yes/no, and no error text is parsed. */
 static int record_exists(cli_ctx *c, const char *site) {
-    pm_msg_t req, resp;
-    pm_msg_wipe(&req);
-    req.type = PM_MSG_GET;
-    set_field(req.site, sizeof req.site, site);
-    if (pm_agent_request(c->sock, &req, &resp) != 0) {
+    if (!agent_alive(c)) {
         say(c, "agent is not running, start it with 'passman unlock'");
         return -1;
     }
-    int result;
-    if (resp.type == PM_MSG_OK) {
-        result = 1;
-    } else if (resp.type == PM_MSG_ERR && strcmp(resp.error, pm_strerror(PM_ERR_NOT_FOUND)) == 0) {
-        result = 0;
-    } else {
-        say(c, "%s", resp.type == PM_MSG_ERR ? resp.error : "unexpected reply from agent");
-        if (resp.type == PM_MSG_ERR && strcmp(resp.error, "vault is locked") == 0) {
-            fputs("hint: run 'passman unlock'\n", c->err);
-        }
-        result = -1;
+    exists_ctx e = {site, 0};
+    if (pm_agent_list(c->sock, exists_cb, &e) != 0) {
+        say(c, "cannot read the record list: vault is locked or the agent failed");
+        fputs("hint: run 'passman unlock'\n", c->err);
+        return -1;
     }
-    pm_msg_wipe(&resp);
-    return result;
+    return e.found;
 }
 
 static int send_put(cli_ctx *c, pm_msg_t *req) {

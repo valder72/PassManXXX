@@ -35,6 +35,7 @@ static struct {
     int unlocked;
     int spawn_calls;
     int put_calls;
+    int get_calls;
     int unlock_calls;
     int nrec;
     pm_msg_t rec[MAX_RECORDS]; // type unused, the other fields as sent with PUT
@@ -74,6 +75,7 @@ int __wrap_pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg
         else err_reply(resp, "unlock failed");
         return 0;
     case PM_MSG_GET: {
+        agent.get_calls++;
         if (!agent.unlocked) {
             err_reply(resp, "vault is locked");
             return 0;
@@ -361,6 +363,9 @@ static void add_existing_asks_before_replacing(void **state) {
     assert_int_equal(run(3, "add", "github", "-f"), 0); // --force: no question
     assert_string_equal(find("github")->password, "newer");
     assert_int_equal(line_reads, 3);
+
+    // the existence check uses the name list: the old secret is never fetched
+    assert_int_equal(agent.get_calls, 0);
 }
 
 static void add_generate(void **state) {
