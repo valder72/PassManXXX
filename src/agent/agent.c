@@ -398,7 +398,7 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
 
     case PM_MSG_GET: {
         if (!sess->unlocked) {
-            set_error(resp, PM_ERR_ARG, "vault is locked");
+            set_error(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             break;
         }
         update_activity(sess);
@@ -420,7 +420,7 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
 
     case PM_MSG_PUT: {
         if (!sess->unlocked) {
-            set_error(resp, PM_ERR_ARG, "vault is locked");
+            set_error(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             break;
         }
         update_activity(sess);
@@ -478,7 +478,7 @@ static void handle_list(int client_fd, agent_session_t *sess) {
     pm_msg_wipe(&resp);
 
     if (!sess->unlocked) {
-        set_error(&resp, PM_ERR_ARG, "vault is locked");
+        set_error(&resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
         pm_ipc_send_msg(client_fd, &resp);
         pm_msg_wipe(&resp);
         return;

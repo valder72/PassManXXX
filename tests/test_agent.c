@@ -146,6 +146,7 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.site, sizeof(req.site), "%s", "github");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_LOCKED);
     assert_string_equal(resp.error, "vault is locked");
 
     collected_sites_t col;
@@ -259,6 +260,7 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.site, sizeof(req.site), "%s", "github");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_LOCKED);
     assert_string_equal(resp.error, "vault is locked");
 
     assert_int_equal(pm_agent_stop(sock_path), 0);
