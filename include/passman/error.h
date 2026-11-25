@@ -17,7 +17,8 @@ typedef enum {
     PM_ERR_NOT_FOUND = -8,
     PM_ERR_TOO_BIG = -9,
     PM_ERR_INTR = -10,
-    PM_ERR_EOF = -11
+    PM_ERR_EOF = -11,
+    PM_ERR_LOCKED = -12
 } pm_status;
 
 // human readable error message with given status. Always string, never NULL

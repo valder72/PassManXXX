@@ -14,6 +14,7 @@ const char *pm_strerror(pm_status st) {
         case PM_ERR_TOO_BIG: return "value is too large";
         case PM_ERR_INTR: return "interrupted";
         case PM_ERR_EOF: return "unexpected end of input";
+        case PM_ERR_LOCKED: return "vault is locked";
     }
     return "unknown error";
 }
