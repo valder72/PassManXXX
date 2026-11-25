@@ -49,7 +49,9 @@ add_library(pm_cli STATIC
     src/cli/term.c
 )
 target_include_directories(pm_cli PUBLIC include)
-target_link_libraries(pm_cli PUBLIC pm_agent)
+# pthread_sigmask: POSIX leaves sigprocmask unspecified once a process has threads
+find_package(Threads REQUIRED)
+target_link_libraries(pm_cli PUBLIC pm_agent Threads::Threads)
 
 # ---- executables ----
 add_executable(passman src/main.c)
