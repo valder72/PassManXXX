@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
 #include <string.h>
@@ -92,7 +93,7 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
         for (size_t i = 0; i < NUM_SIGNALS; i++) {
             sigaddset(&block_mask, s_signals[i]);
         }
-        if (sigprocmask(SIG_BLOCK, &block_mask, &orig_mask) != 0) {
+        if (pthread_sigmask(SIG_BLOCK, &block_mask, &orig_mask) != 0) {
             (void)tcsetattr(tty_fd, TCSAFLUSH, &g_old_term);
             g_term_modified = 0;
             for (size_t i = 0; i < NUM_SIGNALS; i++) {
@@ -170,7 +171,7 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
             g_term_modified = 0;
         }
         if (sa_installed) {
-            if (sigprocmask(SIG_SETMASK, &orig_mask, NULL) != 0) {
+            if (pthread_sigmask(SIG_SETMASK, &orig_mask, NULL) != 0) {
                 read_err = 1; /* signals stay blocked: report it instead of hiding it */
             }
             for (size_t i = 0; i < NUM_SIGNALS; i++) {
