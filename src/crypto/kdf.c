@@ -1,5 +1,3 @@
-#include <sodium/crypto_pwhash.h>
-#include <sodium/crypto_pwhash_argon2id.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
@@ -8,6 +6,7 @@
 
 #include "passman/crypto.h"
 #include "passman/error.h"
+#include "internal.h"
 
 // RFC 9106, Argon2id with t=3. We do not go below this, and vaults with weaker parameters are refused to open
 #define PM_KDF_MIN_OPS 3u
@@ -27,6 +26,9 @@ pm_status pm_kdf_derive(const char *password, size_t password_len, const uint8_t
 
     pm_status st = check_params(params);
     if (st != PM_OK) return st;
+
+    if (pm_overlaps(master_key, PM_KEY_BYTES, salt, PM_SALT_BYTES) ||
+    pm_overlaps(master_key, PM_KEY_BYTES, password, password_len)) return PM_ERR_ARG;
 
     // on fail, libsodioum fills masterkey with zero, so we don't need to do much
     if (crypto_pwhash(master_key, PM_KEY_BYTES, password, password_len, salt, params->opslimit, (size_t)params->memlimit, crypto_pwhash_ALG_ARGON2ID13) != 0) return PM_ERR_NOMEM;
