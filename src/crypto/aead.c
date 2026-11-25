@@ -1,10 +1,10 @@
-#include <sodium/crypto_aead_xchacha20poly1305.h>
 #include <stdint.h>
 
 #include <sodium.h>
 
 #include "passman/crypto.h"
 #include "passman/error.h"
+#include "internal.h"
 
 // Largest plaintext for which PM_SEALED_SIZE() cannot overflow size_t and libsodium still accepts the message
 static size_t max_plain_len(void) {
@@ -19,6 +19,10 @@ pm_status pm_seal(const uint8_t record_key[PM_KEY_BYTES], const uint8_t *plain, 
 
     if (plain_len > max_plain_len()) return PM_ERR_TOO_BIG;
     if (out_size < PM_SEALED_SIZE(plain_len)) return PM_ERR_TOO_BIG;
+
+    size_t total = PM_SEALED_SIZE(plain_len);
+    if (plain != out + PM_NONCE_BYTES && pm_overlaps(plain, plain_len, out, total)) return PM_ERR_ARG;
+    if (pm_overlaps(ad, ad_len, out, total)) return PM_ERR_ARG; // nonce would overwrite the AD before it is authenticated and password would be lost forever, and user would know that they lost pass only after failed deciphering
 
     uint8_t *nonce = out; // first 24 bytes
     pm_random(nonce, PM_NONCE_BYTES); // I forgot this line and this was like critical vulnerability, tests didn't even catch that

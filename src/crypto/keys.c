@@ -2,6 +2,7 @@
 
 #include "passman/crypto.h"
 #include "passman/error.h"
+#include "internal.h"
 
 // These settings are fixed forever, because changing context or key ids changes every subkey of every vault
 #define PM_KDF_CONTEXT "PMXVAULT" // it's okay that is it viewable in source code as this is not a secret
@@ -15,7 +16,9 @@ enum {
 pm_status pm_derive_subkeys(const uint8_t master_key[PM_KEY_BYTES], uint8_t check_key[PM_KEY_BYTES], uint8_t record_key[PM_KEY_BYTES]) {
     if (!master_key || !check_key || !record_key) return PM_ERR_ARG;
 
-    if (check_key == master_key || record_key == master_key || check_key == record_key) return PM_ERR_ARG;
+    if (pm_overlaps(master_key, PM_KEY_BYTES, check_key, PM_KEY_BYTES) ||
+    pm_overlaps(master_key, PM_KEY_BYTES, record_key, PM_KEY_BYTES) ||
+    pm_overlaps(check_key, PM_KEY_BYTES, record_key, PM_KEY_BYTES)) return PM_ERR_ARG;
 
     if (crypto_kdf_derive_from_key(check_key, PM_KEY_BYTES, PM_SUBKEY_CHECK, PM_KDF_CONTEXT, master_key) != 0 || crypto_kdf_derive_from_key(record_key, PM_KEY_BYTES, PM_SUBKEY_RECORD, PM_KDF_CONTEXT, master_key) != 0) {
         pm_wipe(check_key, PM_KEY_BYTES);
