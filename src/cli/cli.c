@@ -115,7 +115,7 @@ static int agent_call(cli_ctx *c, const pm_msg_t *req, pm_msg_t *resp) {
     }
     if (resp->type == PM_MSG_ERR) {
         say(c, "%s", resp->error);
-        if (strcmp(resp->error, "vault is locked") == 0) {
+        if (resp->status == PM_ERR_LOCKED) {
             fputs("hint: run 'passman unlock'\n", c->err);
         }
     } else {
@@ -335,10 +335,16 @@ static int cmd_unlock(cli_ctx *c) {
         return EXIT_FAIL;
     }
     int ok = resp.type == PM_MSG_OK;
+    /* PM_ERR_WRONG_PASS, PM_ERR_CORRUPT, PM_ERR_FORMAT, PM_ERR_IO, ... from
+     * pm_vault_open; anyone with the file can tell these apart anyway */
+    pm_status why = resp.type == PM_MSG_ERR ? resp.status : PM_OK;
     pm_msg_wipe(&resp);
     if (!ok) {
-        /* the agent does not tell wrong password and damaged file apart on purpose */
-        say(c, "unlock failed: wrong password or damaged vault");
+        if (why == PM_OK) {
+            say(c, "unlock failed: unexpected reply from agent");
+        } else {
+            say(c, "unlock failed: %s", pm_strerror(why));
+        }
         return EXIT_FAIL;
     }
     /* the timeout is known only for an agent we started just now */

@@ -2,7 +2,7 @@
 //
 // The linker replaces (-Wl,--wrap) the functions cli.c calls into other modules:
 //   pm_agent_request / pm_agent_list / pm_agent_stop -> a fake agent in memory that
-//       answers like src/agent/agent.c (same error texts, locked/unlocked state)
+//       answers like src/agent/agent.c (same error texts and status codes, locked/unlocked state)
 //   pm_read_password / pm_read_line -> scripted user input
 //   pm_cli_spawn_agent, pm_vault_create, time -> recorded / fixed
 // So every test checks what the user sees AND what was sent to the agent.
@@ -37,6 +37,7 @@ static struct {
     int put_calls;
     int get_calls;
     int unlock_calls;
+    pm_status unlock_error; // PM_OK: check the password; else fail with this status
     int nrec;
     pm_msg_t rec[MAX_RECORDS]; // type unused, the other fields as sent with PUT
 } agent;
@@ -50,8 +51,9 @@ static pm_msg_t *find(const char *site) {
     return NULL;
 }
 
-static void err_reply(pm_msg_t *resp, const char *text) {
+static void err_reply(pm_msg_t *resp, pm_status status, const char *text) {
     resp->type = PM_MSG_ERR;
+    resp->status = status;
     snprintf(resp->error, sizeof resp->error, "%s", text);
 }
 
@@ -70,19 +72,24 @@ int __wrap_pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg
         return 0;
     case PM_MSG_UNLOCK:
         agent.unlock_calls++;
+        if (agent.unlock_error != PM_OK) { // e.g. a damaged vault file
+            agent.unlocked = 0;
+            err_reply(resp, agent.unlock_error, pm_strerror(agent.unlock_error));
+            return 0;
+        }
         agent.unlocked = strcmp(req->password, MASTER) == 0;
         if (agent.unlocked) resp->type = PM_MSG_OK;
-        else err_reply(resp, "unlock failed");
+        else err_reply(resp, PM_ERR_WRONG_PASS, pm_strerror(PM_ERR_WRONG_PASS));
         return 0;
     case PM_MSG_GET: {
         agent.get_calls++;
         if (!agent.unlocked) {
-            err_reply(resp, "vault is locked");
+            err_reply(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             return 0;
         }
         pm_msg_t *r = find(req->site);
         if (r == NULL) {
-            err_reply(resp, pm_strerror(PM_ERR_NOT_FOUND));
+            err_reply(resp, PM_ERR_NOT_FOUND, pm_strerror(PM_ERR_NOT_FOUND));
             return 0;
         }
         *resp = *r;
@@ -91,7 +98,7 @@ int __wrap_pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg
     }
     case PM_MSG_PUT: {
         if (!agent.unlocked) {
-            err_reply(resp, "vault is locked");
+            err_reply(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             return 0;
         }
         agent.put_calls++;
@@ -105,7 +112,7 @@ int __wrap_pm_agent_request(const char *socket_path, const pm_msg_t *req, pm_msg
         return 0;
     }
     default:
-        err_reply(resp, "unknown request");
+        err_reply(resp, PM_ERR_ARG, "unknown request");
         return 0;
     }
 }
@@ -441,6 +448,18 @@ static void unlock_wrong_password(void **state) {
     assert_false(agent.unlocked);
 }
 
+static void unlock_reports_exact_reason(void **state) {
+    (void)state;
+    agent.unlocked = 0;
+    agent.unlock_error = PM_ERR_CORRUPT;
+    type_in(1, MASTER);
+    assert_int_equal(run(1, "unlock"), 1);
+    // the status from the agent, not a guess between password and file
+    assert_non_null(strstr(err_text, pm_strerror(PM_ERR_CORRUPT)));
+    assert_null(strstr(err_text, "wrong password"));
+    assert_false(agent.unlocked);
+}
+
 static void unlock_ctrl_c_sends_nothing(void **state) {
     (void)state;
     agent.unlocked = 0;
@@ -599,6 +618,7 @@ int main(void) {
         T(unlock_starts_agent_once),
         T(running_agent_refuses_vault_and_timeout),
         T(unlock_wrong_password),
+        T(unlock_reports_exact_reason),
         T(unlock_ctrl_c_sends_nothing),
         T(unlock_without_vault),
         T(lock_and_stop),
