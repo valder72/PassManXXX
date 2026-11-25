@@ -134,6 +134,17 @@ static int set_field(char *dst, size_t dst_size, const char *src) {
     return 0;
 }
 
+/* Put a record name into req->site. args.c already limits names to fit, so
+ * this fails only if the two limits drift apart; then say so instead of
+ * sending an empty name that the agent would answer with a confusing error. */
+static int set_site(cli_ctx *c, pm_msg_t *req, const char *name) {
+    if (set_field(req->site, sizeof req->site, name) != 0) {
+        say(c, "name is too long");
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------------ */
 /* input helpers                                                            */
 /* ------------------------------------------------------------------------ */
@@ -419,13 +430,12 @@ static int ask_overwrite(cli_ctx *c, const char *site, const char *shown) {
 
 static int cmd_add(cli_ctx *c) {
     const char *name = c->args->name;
-    if (ask_overwrite(c, name, name) != 0) {
-        return EXIT_FAIL;
-    }
-
     pm_msg_t req;
     pm_msg_wipe(&req);
-    set_field(req.site, sizeof req.site, name);
+    if (set_site(c, &req, name) != 0 || ask_overwrite(c, name, name) != 0) {
+        pm_msg_wipe(&req);
+        return EXIT_FAIL;
+    }
 
     /* visible fields, all optional */
     pm_status st = pm_read_line("e-mail (optional): ", req.email, sizeof req.email);
@@ -462,7 +472,9 @@ static int cmd_get(cli_ctx *c) {
     pm_msg_t req, resp;
     pm_msg_wipe(&req);
     req.type = PM_MSG_GET;
-    set_field(req.site, sizeof req.site, c->args->name);
+    if (set_site(c, &req, c->args->name) != 0) {
+        return EXIT_FAIL;
+    }
     if (agent_call(c, &req, &resp) != 0) {
         return EXIT_FAIL;
     }
@@ -540,7 +552,9 @@ static int cmd_totp_add(cli_ctx *c) {
 
     pm_msg_t req;
     pm_msg_wipe(&req);
-    set_field(req.site, sizeof req.site, site);
+    if (set_site(c, &req, site) != 0) {
+        return EXIT_FAIL;
+    }
     pm_status st = pm_read_password("secret (base32 or otpauth:// URI): ", req.password,
                                     sizeof req.password);
     if (st != PM_OK) {

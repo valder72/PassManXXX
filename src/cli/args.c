@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "passman/agent.h" /* PM_IPC_FIELD_LEN */
 #include "passman/cli.h"
 
 /* Which options each command accepts. -v/--vault and -h/--help are global. */
@@ -74,7 +75,8 @@ static int parse_number(const char *s, unsigned long min, unsigned long max, uns
  * control characters (an escape sequence in a name could rewrite the screen). */
 static int name_ok(const char *name) {
     size_t len = strlen(name);
-    if (len == 0 || len + sizeof(PM_TOTP_PREFIX) > 256u) {
+    /* sizeof counts the '\0', so "totp:" + name + '\0' must fit the field */
+    if (len == 0 || len + sizeof(PM_TOTP_PREFIX) > PM_IPC_FIELD_LEN) {
         return 0;
     }
     for (size_t i = 0; i < len; i++) {
