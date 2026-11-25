@@ -11,7 +11,7 @@
 #include "passman/vault.h"
 
 // weakest parameters the vault accepts so tests are fast
-static const pm_kdf_params FAST = {.opslimit = 3, .memlimit = 8192};
+static const pm_kdf_params FAST = {.opslimit = 3, .memlimit = 64 * 1024 * 1024};
 
 typedef struct {
     char dir[64];
@@ -34,6 +34,11 @@ static int setup(void **state) {
 static int teardown(void **state) {
     fixture *f = *state;
     unlink(f->path);
+
+    char lock[sizeof f->path + sizeof ".lock"];
+    snprintf(lock, sizeof lock, "%s.lock", f->path);
+    unlink(lock);
+
     rmdir(f->dir);
     free(f);
     return 0;
