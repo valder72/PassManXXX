@@ -106,4 +106,12 @@ int pm_cli_main(int argc, char **argv);
  */
 pm_status pm_cli_spawn_agent(const char *vault_path, unsigned timeout_sec);
 
+/*
+ * Where a spawned agent writes its stderr: the socket path plus ".log"
+ * (usually /run/user/<uid>/passman.sock.log). The file is rewritten on every
+ * spawn, so it holds the messages of the last start only.
+ * Returns 0 and the path in out, -1 if it does not fit.
+ */
+int pm_cli_agent_log_path(char *out, size_t out_size);
+
 #endif /* PASSMAN_CLI_H */

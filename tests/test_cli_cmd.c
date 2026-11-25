@@ -536,6 +536,17 @@ static void init_creates_vault(void **state) {
     rmdir(dir);
 }
 
+static void agent_log_next_to_socket(void **state) {
+    (void)state;
+    char path[256];
+    // setup() points PASSMAN_SOCKET at /tmp/pm-cli-test.sock
+    assert_int_equal(pm_cli_agent_log_path(path, sizeof path), 0);
+    assert_string_equal(path, "/tmp/pm-cli-test.sock.log");
+
+    char tiny[8];
+    assert_int_equal(pm_cli_agent_log_path(tiny, sizeof tiny), -1);
+}
+
 static void usage_errors_exit_2(void **state) {
     (void)state;
     assert_int_equal(run(1, "frobnicate"), 2);
@@ -567,6 +578,7 @@ int main(void) {
         T(list_separates_totp),
         T(gen_password),
         T(init_creates_vault),
+        T(agent_log_next_to_socket),
         T(usage_errors_exit_2),
     };
 #undef T

@@ -267,6 +267,10 @@ static int start_agent(cli_ctx *c) {
         nanosleep(&ts, NULL);
     }
     say(c, "pm-agentd did not start (is it installed? set PASSMAN_AGENT to its path)");
+    char log_path[PATH_MAX];
+    if (pm_cli_agent_log_path(log_path, sizeof log_path) == 0) {
+        fprintf(c->err, "hint: the agent's own messages are in %s\n", log_path);
+    }
     return -1;
 }
 

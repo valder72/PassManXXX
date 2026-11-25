@@ -59,6 +59,12 @@ Exit codes: `0` ok, `1` error, `2` bad command line. The vault lives at
 `$PASSMAN_VAULT`, else `$XDG_DATA_HOME/passman/vault.pmx`, else
 `~/.local/share/passman/vault.pmx`; `-v PATH` overrides it.
 
+When `passman unlock` starts `pm-agentd`, the agent is detached from the
+terminal and its error messages go to the socket path plus `.log`, usually
+`/run/user/<uid>/passman.sock.log` (rewritten on every start). If you see
+"pm-agentd did not start", look there for the reason, for example `mlock`
+failing because of `RLIMIT_MEMLOCK`.
+
 ## Status
 
 Skeleton: headers and build are in place, implementations are stubs marked
