@@ -86,12 +86,14 @@ static void test_encode_decode_single_field(void **state) {
 
     pm_msg_wipe(&in);
     in.type = PM_MSG_ERR;
-    snprintf(in.error, sizeof(in.error), "%s", "vault is locked");
+    in.status = PM_ERR_WRONG_PASS;
+    snprintf(in.error, sizeof(in.error), "%s", "wrong password");
     len = pm_msg_encode(&in, buf, sizeof(buf));
     assert_true(len > 0);
     assert_int_equal(pm_msg_decode(buf, (size_t)len, &out), 0);
     assert_int_equal(out.type, PM_MSG_ERR);
-    assert_string_equal(out.error, "vault is locked");
+    assert_int_equal(out.status, PM_ERR_WRONG_PASS);
+    assert_string_equal(out.error, "wrong password");
 }
 
 static void test_encode_decode_put_and_ok(void **state) {

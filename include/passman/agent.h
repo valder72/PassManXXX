@@ -33,6 +33,7 @@ typedef enum {
 
 typedef struct {
     pm_msg_type type;
+    pm_status status; /* carries pm_status on PM_MSG_ERR, PM_OK otherwise */
     char site[PM_IPC_FIELD_LEN];
     char email[PM_IPC_FIELD_LEN];
     char username[PM_IPC_FIELD_LEN];

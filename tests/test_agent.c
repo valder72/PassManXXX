@@ -27,10 +27,10 @@ void __wrap_pm_wipe(void *buf, size_t len) {
 int __wrap_pm_vault_open(const char *path, const char *password, uint8_t key[PM_KEY_BYTES]) {
     (void)path;
     if (!password || strcmp(password, "master123") != 0) {
-        return -1;
+        return PM_ERR_WRONG_PASS;
     }
     memset(key, 0xAB, PM_KEY_BYTES);
-    return 0;
+    return PM_OK;
 }
 
 int __wrap_pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name,
@@ -146,6 +146,7 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.site, sizeof(req.site), "%s", "github");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_LOCKED);
     assert_string_equal(resp.error, "vault is locked");
 
     collected_sites_t col;
@@ -158,6 +159,7 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.password, sizeof(req.password), "%s", "wrong");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_WRONG_PASS);
 
     pm_msg_wipe(&req);
     req.type = PM_MSG_UNLOCK;
@@ -217,7 +219,22 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.site, sizeof(req.site), "%s", "missing");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_NOT_FOUND);
     assert_string_equal(resp.error, pm_strerror(PM_ERR_NOT_FOUND));
+
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_UNLOCK;
+    snprintf(req.password, sizeof(req.password), "%s", "wrong");
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_WRONG_PASS);
+
+    pm_msg_wipe(&req);
+    req.type = PM_MSG_GET;
+    snprintf(req.site, sizeof(req.site), "%s", "special");
+    assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
+    assert_int_equal(resp.type, PM_MSG_OK);
+    assert_string_equal(resp.password, "line1\nline2\r\n\t\\end");
 
     pm_msg_wipe(&req);
     req.type = PM_MSG_LOCK;
@@ -243,6 +260,7 @@ static void test_agent_full_lifecycle(void **state) {
     snprintf(req.site, sizeof(req.site), "%s", "github");
     assert_int_equal(pm_agent_request(sock_path, &req, &resp), 0);
     assert_int_equal(resp.type, PM_MSG_ERR);
+    assert_int_equal(resp.status, PM_ERR_LOCKED);
     assert_string_equal(resp.error, "vault is locked");
 
     assert_int_equal(pm_agent_stop(sock_path), 0);

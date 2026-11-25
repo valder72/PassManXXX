@@ -24,5 +24,6 @@ int pm_ipc_recv_frame_timeout(int fd, void *buf, size_t buf_size, uint16_t *out_
                               int timeout_ms);
 int pm_ipc_send_msg(int fd, const pm_msg_t *msg);
 int pm_ipc_recv_msg(int fd, pm_msg_t *msg);
+int pm_ipc_check_peer_uid(int fd);
 
 #endif

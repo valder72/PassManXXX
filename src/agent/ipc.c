@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <errno.h>
 #include <poll.h>
 #include <stddef.h>
@@ -169,7 +173,10 @@ static int validate_msg_fields(const pm_msg_t *msg) {
     case PM_MSG_GET:
         return msg->site[0] != '\0' ? 0 : -1;
     case PM_MSG_ERR:
-        return msg->error[0] != '\0' ? 0 : -1;
+        return (msg->error[0] != '\0' && (int)msg->status >= INT8_MIN &&
+                (int)msg->status <= INT8_MAX)
+                   ? 0
+                   : -1;
     case PM_MSG_PUT:
         return msg->site[0] != '\0' ? 0 : -1;
     case PM_MSG_OK:
@@ -211,7 +218,12 @@ int pm_msg_encode(const pm_msg_t *msg, char *buf, size_t buf_size) {
         rc = write_field(payload, payload_cap, &offset, msg->site, sizeof(msg->site));
         break;
     case PM_MSG_ERR:
-        rc = write_field(payload, payload_cap, &offset, msg->error, sizeof(msg->error));
+        if (offset >= payload_cap) {
+            rc = -1;
+        } else {
+            payload[offset++] = (uint8_t)(int8_t)msg->status;
+            rc = write_field(payload, payload_cap, &offset, msg->error, sizeof(msg->error));
+        }
         break;
     case PM_MSG_PUT:
     case PM_MSG_OK:
@@ -277,7 +289,12 @@ int pm_msg_decode(const char *buf, size_t buf_len, pm_msg_t *msg) {
         rc = read_field(payload, payload_size, &offset, msg->site, sizeof(msg->site));
         break;
     case PM_MSG_ERR:
-        rc = read_field(payload, payload_size, &offset, msg->error, sizeof(msg->error));
+        if (offset >= payload_size) {
+            rc = -1;
+        } else {
+            msg->status = (pm_status)(int8_t)payload[offset++];
+            rc = read_field(payload, payload_size, &offset, msg->error, sizeof(msg->error));
+        }
         break;
     case PM_MSG_PUT:
     case PM_MSG_OK:
@@ -402,6 +419,22 @@ int pm_ipc_recv_msg(int fd, pm_msg_t *msg) {
     return rc;
 }
 
+int pm_ipc_check_peer_uid(int fd) {
+#if defined(__linux__) && defined(SO_PEERCRED)
+    struct ucred cred;
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0 || len != sizeof(cred)) {
+        return -1;
+    }
+    if (cred.uid != getuid()) {
+        return -1;
+    }
+#else
+    (void)fd;
+#endif
+    return 0;
+}
+
 static int connect_unix_socket(const char *socket_path) {
     if (!socket_path || socket_path[0] == '\0') {
         return -1;
@@ -421,6 +454,10 @@ static int connect_unix_socket(const char *socket_path) {
         return -1;
     }
     if (connect(fd, (const struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (pm_ipc_check_peer_uid(fd) != 0) {
         close(fd);
         return -1;
     }

@@ -235,8 +235,9 @@ static int compute_poll_timeout_ms(const agent_session_t *sess) {
     return remaining > INT_MAX ? INT_MAX : (int)remaining;
 }
 
-static void set_error(pm_msg_t *resp, const char *text) {
+static void set_error(pm_msg_t *resp, pm_status status, const char *text) {
     resp->type = PM_MSG_ERR;
+    resp->status = status;
     snprintf(resp->error, sizeof(resp->error), "%s", text);
 }
 
@@ -368,17 +369,21 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
         resp->type = PM_MSG_OK;
         break;
 
-    case PM_MSG_UNLOCK:
-        if (pm_vault_open(sess->vault_path, req->password, sess->key) == 0) {
+    case PM_MSG_UNLOCK: {
+        uint8_t tmp_key[PM_KEY_BYTES];
+        int st = pm_vault_open(sess->vault_path, req->password, tmp_key);
+        if (st == PM_OK) {
+            memcpy(sess->key, tmp_key, sizeof(sess->key));
             sess->unlocked = 1;
             update_activity(sess);
             resp->type = PM_MSG_OK;
         } else {
-            lock_session(sess);
-            set_error(resp, "unlock failed");
+            set_error(resp, (pm_status)st, pm_strerror((pm_status)st));
         }
+        pm_wipe(tmp_key, sizeof(tmp_key));
         pm_msg_wipe(req);
         break;
+    }
 
     case PM_MSG_LOCK:
         lock_session(sess);
@@ -393,7 +398,7 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
 
     case PM_MSG_GET: {
         if (!sess->unlocked) {
-            set_error(resp, "vault is locked");
+            set_error(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             break;
         }
         update_activity(sess);
@@ -404,10 +409,10 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
                 resp->type = PM_MSG_OK;
             } else {
                 pm_msg_wipe(resp);
-                set_error(resp, "record too large");
+                set_error(resp, PM_ERR_TOO_BIG, "record too large");
             }
         } else {
-            set_error(resp, pm_strerror((pm_status)st));
+            set_error(resp, (pm_status)st, pm_strerror((pm_status)st));
         }
         pm_wipe(secret, sizeof(secret));
         break;
@@ -415,17 +420,20 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
 
     case PM_MSG_PUT: {
         if (!sess->unlocked) {
-            set_error(resp, "vault is locked");
+            set_error(resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
             break;
         }
         update_activity(sess);
         char secret[PM_MAX_SECRET_LEN];
         if (pack_secret(req, secret, sizeof(secret)) != 0) {
-            set_error(resp, "invalid record fields");
-        } else if (pm_vault_put(sess->vault_path, sess->key, req->site, secret) == 0) {
-            resp->type = PM_MSG_OK;
+            set_error(resp, PM_ERR_TOO_BIG, "record too large");
         } else {
-            set_error(resp, "vault write failed");
+            int st = pm_vault_put(sess->vault_path, sess->key, req->site, secret);
+            if (st == PM_OK) {
+                resp->type = PM_MSG_OK;
+            } else {
+                set_error(resp, (pm_status)st, pm_strerror((pm_status)st));
+            }
         }
         pm_wipe(secret, sizeof(secret));
         pm_msg_wipe(req);
@@ -433,7 +441,7 @@ static void handle_request(agent_session_t *sess, pm_msg_t *req, pm_msg_t *resp)
     }
 
     default:
-        set_error(resp, "unknown request");
+        set_error(resp, PM_ERR_ARG, "unknown request");
         break;
     }
 }
@@ -470,7 +478,7 @@ static void handle_list(int client_fd, agent_session_t *sess) {
     pm_msg_wipe(&resp);
 
     if (!sess->unlocked) {
-        set_error(&resp, "vault is locked");
+        set_error(&resp, PM_ERR_LOCKED, pm_strerror(PM_ERR_LOCKED));
         pm_ipc_send_msg(client_fd, &resp);
         pm_msg_wipe(&resp);
         return;
@@ -482,35 +490,16 @@ static void handle_list(int client_fd, agent_session_t *sess) {
     if (ctx.send_err) {
         return;
     }
-    if (vault_rc != 0) {
-        if (!ctx.sent_any) {
-            set_error(&resp, "vault list failed");
-            pm_ipc_send_msg(client_fd, &resp);
-            pm_msg_wipe(&resp);
-        }
+    if (vault_rc != PM_OK) {
+        set_error(&resp, (pm_status)vault_rc, pm_strerror((pm_status)vault_rc));
+        pm_ipc_send_msg(client_fd, &resp);
+        pm_msg_wipe(&resp);
         return;
     }
 
     resp.type = PM_MSG_LIST_END;
     pm_ipc_send_msg(client_fd, &resp);
     pm_msg_wipe(&resp);
-}
-
-static int check_peer_credentials(int client_fd) {
-#if defined(__linux__) && defined(SO_PEERCRED)
-    struct ucred cred;
-    socklen_t len = sizeof(cred);
-    if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0 ||
-        len != sizeof(cred)) {
-        return -1;
-    }
-    if (cred.uid != getuid()) {
-        return -1;
-    }
-#else
-    (void)client_fd;
-#endif
-    return 0;
 }
 
 static void handle_client(int client_fd, agent_session_t *sess) {
@@ -605,7 +594,7 @@ int pm_agent_run(const char *vault_path, unsigned idle_timeout_sec) {
                 perror("pm-agentd: accept");
                 break;
             }
-            if (check_peer_credentials(client_fd) == 0) {
+            if (pm_ipc_check_peer_uid(client_fd) == 0) {
                 handle_client(client_fd, &sess);
             }
             close(client_fd);
