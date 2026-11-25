@@ -10,7 +10,7 @@ Local command-line password and 2FA manager with no cloud or external servers.
 
 ---
 
-## How It Works (Visual Overview)
+## How It Works 
 
 ```text
   User in Terminal
@@ -32,7 +32,7 @@ Local command-line password and 2FA manager with no cloud or external servers.
    └───────────────┘
 ```
 
-### Simple Explanation of Each Part
+### Explanation of Each Part
 
 - **CLI (`passman`)** — the program you run in your terminal. It reads your command (`init`, `add`, `get`, `totp`, etc.), asks for passwords without showing them on screen, sends the request to the agent, and prints the result. It never stores the master key itself.
 - **Agent (`pm-agentd`) & IPC** — a small background helper started by `unlock`. It unlocks the vault once and keeps the key in protected RAM so you do not have to type your master password before every `get` or `add`. If you do nothing for the configured timeout (5 minutes by default), it wipes the key from memory automatically. Communication with the CLI happens locally over a socket file accessible only to your user.
