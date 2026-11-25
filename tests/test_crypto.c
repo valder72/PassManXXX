@@ -31,7 +31,7 @@ static void init_is_idempotent(void **state) {
 
 static void strerror_never_null(void **state) {
     (void)state;
-    for (int st = PM_ERR_EOF; st <= PM_OK; st++) {
+    for (int st = PM_ERR_LOCKED; st <= PM_OK; st++) {
         assert_non_null(pm_strerror((pm_status)st));
     }
     assert_string_equal(pm_strerror((pm_status)-67), "unknown error");
