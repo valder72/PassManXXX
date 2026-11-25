@@ -33,6 +33,9 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
     }
 
     buf[0] = '\0';
+    /* reset first: a signal from an earlier call must not cancel this one,
+     * also when stdin is not a terminal */
+    g_caught_sig = 0;
 
     int tty_fd = STDIN_FILENO;
     int is_tty = isatty(tty_fd);
@@ -55,7 +58,6 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
         }
 
         g_tty_fd = tty_fd;
-        g_caught_sig = 0;
 
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
@@ -90,7 +92,14 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
         for (size_t i = 0; i < NUM_SIGNALS; i++) {
             sigaddset(&block_mask, s_signals[i]);
         }
-        sigprocmask(SIG_BLOCK, &block_mask, &orig_mask);
+        if (sigprocmask(SIG_BLOCK, &block_mask, &orig_mask) != 0) {
+            (void)tcsetattr(tty_fd, TCSAFLUSH, &g_old_term);
+            g_term_modified = 0;
+            for (size_t i = 0; i < NUM_SIGNALS; i++) {
+                sigaction(s_signals[i], &old_sa[i], NULL);
+            }
+            return PM_ERR_IO;
+        }
     }
 
     size_t pos = 0;
@@ -161,7 +170,9 @@ pm_status pm_read_password(const char *prompt, char *buf, size_t buf_size) {
             g_term_modified = 0;
         }
         if (sa_installed) {
-            sigprocmask(SIG_SETMASK, &orig_mask, NULL);
+            if (sigprocmask(SIG_SETMASK, &orig_mask, NULL) != 0) {
+                read_err = 1; /* signals stay blocked: report it instead of hiding it */
+            }
             for (size_t i = 0; i < NUM_SIGNALS; i++) {
                 sigaction(s_signals[i], &old_sa[i], NULL);
             }
