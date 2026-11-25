@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE // for FAT support (renameat2)
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -6,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include <sodium.h>
@@ -13,6 +18,7 @@
 #include "passman/vault.h"
 #include "passman/crypto.h"
 #include "passman/error.h"
+
 
 #define OFF_VERSION 8u
 #define OFF_OPS     12u
@@ -37,7 +43,7 @@ static uint64_t get_le(const uint8_t *p, size_t n) {
 }
 
 static pm_status read_file(const char *path, uint8_t **out, size_t *out_len) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK); // if fifo we hang so use nonblock
     if (fd < 0) return PM_ERR_IO;
 
     struct stat st;
@@ -101,6 +107,15 @@ static int sync_parent_dir(const char *path) {
     return rc;
 }
 
+static int install_new(const char *tmp, const char *path) {
+    if (renameat2(AT_FDCWD, tmp, AT_FDCWD, path, RENAME_NOREPLACE) == 0) return 0;
+    if (errno != EINVAL && errno != ENOSYS) return -1;
+
+    if (link(tmp, path) != 0) return -1;
+    unlink(tmp);
+    return 0;
+}
+
 // Write a complete new file next to path, then put it in place in one step, so a crash leaves either the old vault or the new, never half of it; replace == 0: fail if path already exists (link() never overwrites)
 static pm_status write_atomic(const char *path, const uint8_t *data, size_t len, int replace) {
     size_t plen = strlen(path);
@@ -116,18 +131,12 @@ static pm_status write_atomic(const char *path, const uint8_t *data, size_t len,
     int ok = write_all(fd, data, len) == 0 && fsync(fd) == 0;
     ok = (close(fd) == 0) && ok;
 
-    if (ok) {
-        if (replace) {
-            ok = rename(tmp, path) == 0;
-        } else {
-            ok = link(tmp, path) == 0;
-            unlink(tmp);
-        }
-    }
-    if (!ok) unlink(tmp);
-    free(tmp);
+    if (ok) ok = (replace ? rename(tmp, path) : install_new(tmp, path)) == 0;
+    if (!ok) unlink(tmp); 
+    free(tmp); 
+    if (!ok) return PM_ERR_IO;
 
-    if (!ok || sync_parent_dir(path) != 0) return PM_ERR_IO;
+    (void)sync_parent_dir(path);
     return PM_OK;
 }
 
@@ -198,6 +207,10 @@ static void ctx_free(vault_ctx *v) {
 #define MAX_OPSLIMIT 64u
 #define MAX_MEMLIMIT (1ull << 30) // 1 gb
 
+static int params_in_range(const pm_kdf_params *p) {
+    return p->opslimit <= MAX_OPSLIMIT && p->memlimit <= MAX_MEMLIMIT && p->memlimit >= crypto_pwhash_argon2id_MEMLIMIT_INTERACTIVE;
+}
+
 static pm_status parse_header(const uint8_t *file, size_t len, pm_kdf_params *params) {
     if (len < HDR_BYTES + PM_NONCE_BYTES + PM_TAG_BYTES) return PM_ERR_FORMAT;
 
@@ -207,7 +220,7 @@ static pm_status parse_header(const uint8_t *file, size_t len, pm_kdf_params *pa
 
     params->opslimit = get_le(file + OFF_OPS, 8);
     params->memlimit = get_le(file + OFF_MEM, 8);
-    if (params->opslimit > MAX_OPSLIMIT || params->memlimit > MAX_MEMLIMIT) return PM_ERR_FORMAT;
+    if (params_in_range(params) == 0) return PM_ERR_FORMAT;
 
     return PM_OK;
 }
@@ -239,6 +252,7 @@ static pm_status unlock(const uint8_t *file, size_t len, const uint8_t master[PM
 
     size_t plain_len = 0;
     st = pm_open(v->record_key, file + HDR_BYTES, len - HDR_BYTES, file, HDR_BYTES, v->body, v->body_len, &plain_len);
+    v->body_len = plain_len;
     if (st == PM_OK) st = validate_body(v->body, plain_len);
     if (st != PM_OK) {ctx_free(v); return st == PM_ERR_FORMAT ? PM_ERR_CORRUPT : st;}
 
@@ -270,7 +284,7 @@ static pm_status store(const char *path, const vault_ctx *v, const uint8_t *body
 
     size_t sealed_len = 0;
     pm_status st = pm_seal(v->record_key, body, body_len, v->header, HDR_BYTES, file + HDR_BYTES, total - HDR_BYTES, &sealed_len);
-    if (st == PM_OK) st = write_atomic(path, file, total, replace);
+    if (st == PM_OK) st = write_atomic(path, file, HDR_BYTES + sealed_len, replace);
     free(file);
 
     return st;
@@ -281,14 +295,19 @@ static int name_equals(const record_view *r, const char *name, size_t name_len) 
 }
 
 pm_status pm_vault_create(const char *path, const char *password, const pm_kdf_params *params) {
-    if (!path || !password) return PM_ERR_ARG;
+    if (!path || !password || password[0] == '\0') return PM_ERR_ARG;
 
     pm_kdf_params p;
-    if (params) p = *params;
+    if (params) {
+        p = *params;
+    }
     else {
         pm_status cst = pm_kdf_calibrate(PM_VAULT_DEFAULT_MEMLIMIT, PM_VAULT_DEFAULT_TARGET_MS, &p);
         if (cst != PM_OK) return cst;
+        if (p.opslimit > MAX_OPSLIMIT) p.opslimit = MAX_OPSLIMIT;
     }
+
+    if (params_in_range(&p) == 0) return PM_ERR_ARG;
 
     vault_ctx v = {0};
     memcpy(v.header, PM_MAGIC, MAGIC_BYTES);
@@ -343,13 +362,7 @@ pm_status pm_vault_open(const char *path, const char *password, uint8_t key[PM_K
     return st;
 }
 
-pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name, const char *secret) {
-    if (!name || !secret) return PM_ERR_ARG;
-    
-    size_t name_len = strlen(name), secret_len = strlen(secret);
-    if (name_len == 0) return PM_ERR_ARG;
-    if (name_len >= PM_MAX_NAME_LEN || secret_len >= PM_MAX_SECRET_LEN) return PM_ERR_TOO_BIG;
-
+static pm_status put_locked(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name, size_t name_len, const char *secret, size_t secret_len) {
     vault_ctx v = {0};
     pm_status st = load(path, key, &v);
     if (st != PM_OK) return st;
@@ -365,7 +378,7 @@ pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     record_view r;
     for (uint64_t i = 0; i < count; i++) {
         size_t start = off;
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {sodium_free(nb); ctx_free(&v); return PM_ERR_CORRUPT;}
         if (!name_equals(&r, name, name_len)) {
             memcpy(nb + out, v.body + start, off - start);
             out += off - start;
@@ -383,9 +396,39 @@ pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     put_le(nb, kept + 1, 4);
 
     st = store(path, &v, nb, out, 1);
+
     sodium_free(nb);
     ctx_free(&v);
     
+    return st;
+}
+
+pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const char *name, const char *secret) {
+    if (!name || !secret || !path) return PM_ERR_ARG;
+
+    size_t name_len = strlen(name), secret_len = strlen(secret);
+    if (name_len == 0) return PM_ERR_ARG;
+    if (name_len >= PM_MAX_NAME_LEN || secret_len >= PM_MAX_SECRET_LEN) return PM_ERR_TOO_BIG;
+
+    // there was a vulnerability using symlinks - no more >:)   
+    char *real = realpath(path, NULL);
+    if (!real) return PM_ERR_IO;
+
+    size_t plen = strlen(real);
+    char *lock_path = malloc(plen + sizeof ".lock");
+    if (!lock_path) {free(real); return PM_ERR_NOMEM;}
+
+    memcpy(lock_path, real, plen);
+    memcpy(lock_path + plen, ".lock", sizeof ".lock");
+    int lk = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    free(lock_path);
+    if (lk < 0) {free(real); return PM_ERR_IO;}
+    if (flock(lk, LOCK_EX) != 0) {close(lk); free(real); return PM_ERR_IO;}
+
+    pm_status st = put_locked(real, key, name, name_len, secret, secret_len);
+    close(lk);
+    free(real);
+
     return st;
 }
 
@@ -403,7 +446,7 @@ pm_status pm_vault_get(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     st = PM_ERR_NOT_FOUND;
 
     for (uint64_t i = 0; i < count; i++) {
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {st = PM_ERR_CORRUPT; break;}
         if (name_equals(&r, name, name_len)) {
             if (r.secret_len >= out_size) {
                 st = PM_ERR_TOO_BIG;
@@ -433,13 +476,14 @@ pm_status pm_vault_list(const char *path, const uint8_t key[PM_KEY_BYTES], pm_va
     char name[PM_MAX_NAME_LEN];
 
     for (uint64_t i = 0; i < count; i++) {
-        next_record(v.body, v.body_len, &off, &r);
+        if (next_record(v.body, v.body_len, &off, &r) != PM_OK) {st = PM_ERR_CORRUPT; break;}
         memcpy(name, r.name, r.name_len);
         name[r.name_len] = '\0';
 
         if (cb(name, user_data) != 0) break;
     }
 
+    pm_wipe(name, sizeof name);
     ctx_free(&v);
-    return PM_OK;
+    return st;
 }

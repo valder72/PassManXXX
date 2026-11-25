@@ -31,11 +31,6 @@
 #define PM_VAULT_DEFAULT_MEMLIMIT (256ull * 1024u * 1024u)
 #define PM_VAULT_DEFAULT_TARGET_MS 1000u
 
-typedef struct {
-    uint8_t  salt[PM_SALT_BYTES];
-    pm_kdf_params kdf;
-} pm_vault_header;
-
 // Create a new empty vault. fails with PM_ERR_IO if path already exists; params == NULL: calibrate Argon2id on this machine (~1s); caller enforces password policy (like no empty password)
 pm_status pm_vault_create(const char *path, const char *password, const pm_kdf_params *params);
 
