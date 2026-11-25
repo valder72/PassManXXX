@@ -204,6 +204,25 @@ static void aead_size_errors(void **state) {
     assert_int_equal(pm_open(AEAD_KEY, out, sizeof out, NULL, 0, plain, sizeof plain, &len), PM_ERR_TOO_BIG);
 }
 
+static void seal_rejects_overlap_but_allows_in_place(void **state) {
+    (void)state;
+    uint8_t buf[PM_SEALED_SIZE(16)];
+    size_t len = 0, plain_len = 0;
+    uint8_t plain[16];
+
+    memcpy(buf, "sixteen byte msg", 16);
+    assert_int_equal(pm_seal(AEAD_KEY, buf, 16, NULL, 0, buf, sizeof buf, &len), PM_ERR_ARG);
+
+    memcpy(buf + PM_NONCE_BYTES, "sixteen byte msg", 16);
+    assert_int_equal(pm_seal(AEAD_KEY, buf + PM_NONCE_BYTES, 16, NULL, 0, buf, sizeof buf, &len), PM_OK);
+    assert_int_equal(pm_open(AEAD_KEY, buf, len, NULL, 0, plain, sizeof plain, &plain_len), PM_OK);
+    assert_memory_equal(plain, "sixteen byte msg", 16);
+
+    uint8_t keys[2 * PM_KEY_BYTES] = {0};
+    uint8_t other[PM_KEY_BYTES];
+    assert_int_equal(pm_derive_subkeys(keys, keys + 16, other), PM_ERR_ARG);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(init_is_idempotent),
@@ -219,7 +238,8 @@ int main(void) {
         cmocka_unit_test(open_rejects_tampering),
         cmocka_unit_test(seal_open_round_trip_and_fresh_nonce),
         cmocka_unit_test(aead_size_errors),
-        cmocka_unit_test(key_check_known_answer_and_mismatch)
+        cmocka_unit_test(key_check_known_answer_and_mismatch),
+        cmocka_unit_test(seal_rejects_overlap_but_allows_in_place)
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
