@@ -43,7 +43,7 @@ static uint64_t get_le(const uint8_t *p, size_t n) {
 }
 
 static pm_status read_file(const char *path, uint8_t **out, size_t *out_len) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK); // if fifo we hang so use nonblock
     if (fd < 0) return PM_ERR_IO;
 
     struct stat st;
@@ -132,7 +132,9 @@ static pm_status write_atomic(const char *path, const uint8_t *data, size_t len,
     ok = (close(fd) == 0) && ok;
 
     if (ok) ok = (replace ? rename(tmp, path) : install_new(tmp, path)) == 0;
-    if (!ok) {unlink(tmp); free(tmp); return PM_ERR_IO;}
+    if (!ok) unlink(tmp); 
+    free(tmp); 
+    if (!ok) return PM_ERR_IO;
 
     (void)sync_parent_dir(path);
     return PM_OK;
@@ -302,6 +304,7 @@ pm_status pm_vault_create(const char *path, const char *password, const pm_kdf_p
     else {
         pm_status cst = pm_kdf_calibrate(PM_VAULT_DEFAULT_MEMLIMIT, PM_VAULT_DEFAULT_TARGET_MS, &p);
         if (cst != PM_OK) return cst;
+        if (p.opslimit > MAX_OPSLIMIT) p.opslimit = MAX_OPSLIMIT;
     }
 
     if (params_in_range(&p) == 0) return PM_ERR_ARG;
@@ -407,19 +410,24 @@ pm_status pm_vault_put(const char *path, const uint8_t key[PM_KEY_BYTES], const 
     if (name_len == 0) return PM_ERR_ARG;
     if (name_len >= PM_MAX_NAME_LEN || secret_len >= PM_MAX_SECRET_LEN) return PM_ERR_TOO_BIG;
 
-    size_t plen = strlen(path);
-    char *lock_path = malloc(plen + sizeof ".lock");
-    if (!lock_path) return PM_ERR_NOMEM;
+    // there was a vulnerability using symlinks - no more >:)   
+    char *real = realpath(path, NULL);
+    if (!real) return PM_ERR_IO;
 
-    memcpy(lock_path, path, plen);
+    size_t plen = strlen(real);
+    char *lock_path = malloc(plen + sizeof ".lock");
+    if (!lock_path) {free(real); return PM_ERR_NOMEM;}
+
+    memcpy(lock_path, real, plen);
     memcpy(lock_path + plen, ".lock", sizeof ".lock");
     int lk = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     free(lock_path);
-    if (lk < 0) return PM_ERR_IO;
-    if (flock(lk, LOCK_EX) != 0) {close(lk); return PM_ERR_IO;}
+    if (lk < 0) {free(real); return PM_ERR_IO;}
+    if (flock(lk, LOCK_EX) != 0) {close(lk); free(real); return PM_ERR_IO;}
 
-    pm_status st = put_locked(path, key, name, name_len, secret, secret_len);
+    pm_status st = put_locked(real, key, name, name_len, secret, secret_len);
     close(lk);
+    free(real);
 
     return st;
 }
