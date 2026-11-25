@@ -9,6 +9,12 @@ add_executable(test_vault test_vault.c)
 target_link_libraries(test_vault PRIVATE pm_vault PkgConfig::CMOCKA)
 add_test(NAME vault COMMAND test_vault)
 
+add_executable(test_cli test_cli.c)
+find_package(Threads REQUIRED)
+# openpty (libutil) and a helper thread drive pm_read_password through a real pty
+target_link_libraries(test_cli PRIVATE pm_cli PkgConfig::CMOCKA Threads::Threads util)
+add_test(NAME cli COMMAND test_cli)
+
 add_executable(test_ipc test_ipc.c)
 target_include_directories(test_ipc PRIVATE ${CMAKE_SOURCE_DIR}/src/agent)
 target_link_libraries(test_ipc PRIVATE pm_agent PkgConfig::CMOCKA)

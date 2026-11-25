@@ -43,9 +43,19 @@ add_library(pm_agent STATIC
 )
 target_link_libraries(pm_agent PUBLIC pm_vault)
 
+# ---- cli library: argument parsing, terminal I/O ----
+add_library(pm_cli STATIC
+    src/cli/cli.c
+    src/cli/term.c
+)
+target_include_directories(pm_cli PUBLIC include)
+# pthread_sigmask: POSIX leaves sigprocmask unspecified once a process has threads
+find_package(Threads REQUIRED)
+target_link_libraries(pm_cli PUBLIC pm_agent Threads::Threads)
+
 # ---- executables ----
-add_executable(passman src/main.c src/cli/cli.c src/cli/term.c)
-target_link_libraries(passman PRIVATE pm_agent)
+add_executable(passman src/main.c)
+target_link_libraries(passman PRIVATE pm_cli)
 
 add_executable(pm-agentd src/agent/main.c)
 target_link_libraries(pm-agentd PRIVATE pm_agent)
