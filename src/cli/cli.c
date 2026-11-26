@@ -489,7 +489,7 @@ static int cmd_add(cli_ctx *c) {
         return EXIT_FAIL;
     }
     fprintf(c->err, "saved '%s'%s\n", name,
-            c->args->generate ? ", see it with 'passman get'" : "");
+            c->args->generate ? ", print it with 'passman get -p'" : "");
     return EXIT_OK;
 }
 
@@ -511,7 +511,10 @@ static int cmd_get(cli_ctx *c) {
         if (resp.email[0] != '\0') fprintf(c->out, "e-mail:   %s\n", resp.email);
         if (resp.username[0] != '\0') fprintf(c->out, "username: %s\n", resp.username);
         if (resp.phone[0] != '\0') fprintf(c->out, "phone:    %s\n", resp.phone);
-        fprintf(c->out, "password: %s\n", resp.password);
+        /* the password is not shown by default: it would stay on the screen,
+         * in the scrollback and in screenshots; -p prints it on purpose */
+        fprintf(c->out, "password: ********\n");
+        fprintf(c->err, "hint: 'passman get -p %s' prints the password\n", c->args->name);
     }
     fflush(c->out);
     pm_msg_wipe(&resp);
