@@ -294,8 +294,18 @@ static void get_prints_record(void **state) {
     assert_int_equal(run(2, "get", "github"), 0);
     assert_non_null(strstr(out_text, "name:     github\n"));
     assert_non_null(strstr(out_text, "e-mail:   dima@example.com\n"));
-    assert_non_null(strstr(out_text, "password: hunter2\n"));
+    assert_non_null(strstr(out_text, "password: ********\n"));
     assert_null(strstr(out_text, "phone")); // empty fields are not shown
+}
+
+/* without -p the password must not reach the output at all, not even on stderr */
+static void get_hides_password_by_default(void **state) {
+    (void)state;
+    add_record("github", "dima@example.com", "hunter2");
+    assert_int_equal(run(2, "get", "github"), 0);
+    assert_null(strstr(out_text, "hunter2"));
+    assert_null(strstr(err_text, "hunter2"));
+    assert_non_null(strstr(err_text, "passman get -p github"));
 }
 
 static void get_password_only_is_script_friendly(void **state) {
@@ -607,6 +617,7 @@ int main(void) {
 #define T(f) cmocka_unit_test_setup_teardown(f, setup, teardown)
     const struct CMUnitTest tests[] = {
         T(get_prints_record),
+        T(get_hides_password_by_default),
         T(get_password_only_is_script_friendly),
         T(get_errors),
         T(add_sends_all_fields),

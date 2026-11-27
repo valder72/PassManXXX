@@ -272,7 +272,7 @@ void pm_cli_usage(FILE *out) {
           "\n"
           "records:\n"
           "  add NAME [-f] [-g [-l N] [--no-symbols]]   add or replace (-g: generate password)\n"
-          "  get NAME [-p]         show a record (-p: only the password, for scripts)\n"
+          "  get NAME [-p]         show a record, password hidden (-p: print only the password)\n"
           "  list                  record names\n"
           "  gen [-l N] [--no-symbols]                  print a random password\n"
           "\n"

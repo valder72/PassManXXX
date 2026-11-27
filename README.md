@@ -105,7 +105,7 @@ passman add github
 # Add a record with an auto-generated 32-character password
 passman add wifi -g -l 32
 
-# Show the full record
+# Show the record (the password is shown as ******** so it does not stay on screen)
 passman get github
 
 # Print only the password (useful for copying to clipboard or scripts)
